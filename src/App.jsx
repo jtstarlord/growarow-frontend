@@ -778,7 +778,7 @@ function AboutTab() {
       <div className="bg-gradient-to-br from-green-50 to-emerald-100 border-2 border-green-300 rounded-2xl p-8 text-center">
         <div className="text-6xl mb-3">🌱</div>
         <h2 className="text-3xl font-black text-green-800">Grow-A-Row Impact Dashboard</h2>
-        <p className="text-green-600 mt-2 text-lg">Fighting Food Insecurity One Pound at a Time</p>
+        <p className="text-green-600 mt-2 text-lg">Fighting Food Insecurity One Tomato at a Time</p>
         <p className="text-gray-500 mt-3 text-sm max-w-xl mx-auto">
           A full-stack web application for tracking fresh produce donations to food-insecure families.
           Built to replace manual spreadsheet tracking with a collaborative, real-time dashboard.
@@ -1161,7 +1161,7 @@ export default function App() {
 
       {/* Footer */}
       <footer className="bg-gray-800 text-gray-400 text-center text-sm py-6 mt-12">
-        <p>Grow-A-Row Impact Dashboard &middot; Fighting Food Insecurity One Pound at a Time</p>
+        <p>Grow-A-Row Impact Dashboard &middot; Fighting Food Insecurity One Tomato at a Time</p>
         {metrics?.date_range_start && <p className="mt-1 text-gray-500">Data: {new Date(metrics.date_range_start + 'T12:00:00').toLocaleDateString()} &ndash; {new Date(metrics.date_range_end + 'T12:00:00').toLocaleDateString()}</p>}
       </footer>
     </div>
