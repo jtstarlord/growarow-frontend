@@ -1148,11 +1148,11 @@ export default function App() {
       {!loading && !error && (
         <main className="max-w-7xl mx-auto">
           {tab === 'overview' && <OverviewTab metrics={metrics} donorStats={donorStats} productStats={productStats} />}
-          {tab === 'donors' && <DonorsTab donorStats={donorStats} />}
+          {tab === 'donors' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><DonorsTab donorStats={donorStats} /></PinGate>}
           {tab === 'products' && <ProductsTab productStats={productStats} />}
           {tab === 'trends' && <TrendsTab donations={donations} />}
           {tab === 'yoy' && <YearOverYearTab seasons={seasons} yoyData={yoyData} />}
-          {tab === 'donations' && <DonationsTab donations={donations} />}
+          {tab === 'donations' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><DonationsTab donations={donations} /></PinGate>}
           {tab === 'add' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><AddDonationTab products={products} onAdded={() => { loadData(); refreshSeasons() }} /></PinGate>}
           {tab === 'manage' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><ManageProductsTab products={products} onUpdated={loadData} seasons={seasons} /></PinGate>}
           {tab === 'about' && <AboutTab />}
