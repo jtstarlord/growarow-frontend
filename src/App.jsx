@@ -288,9 +288,23 @@ function AddDonationTab({ products, onAdded }) {
   const [form, setForm] = useState({ donor_name: '', product_name: '', weight: '', donation_date: new Date().toISOString().slice(0, 10), notes: '' })
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState(null)
+  const [seasonPriceMap, setSeasonPriceMap] = useState({})
+
+  // Load season-specific prices when date changes
+  const donationYear = form.donation_date ? parseInt(form.donation_date.slice(0, 4)) : new Date().getFullYear()
+  useEffect(() => {
+    api(`/product-prices/for-year/${donationYear}`)
+      .then(prices => {
+        const map = {}
+        prices.forEach(p => { map[p.product_name] = p.effective_price })
+        setSeasonPriceMap(map)
+      })
+      .catch(() => {})
+  }, [donationYear])
 
   const selectedProduct = products.find(p => p.name === form.product_name)
-  const calcValue = selectedProduct && form.weight ? (parseFloat(form.weight) * selectedProduct.price_per_lb).toFixed(2) : null
+  const effectivePrice = seasonPriceMap[form.product_name] || (selectedProduct ? selectedProduct.price_per_lb : null)
+  const calcValue = effectivePrice && form.weight ? (parseFloat(form.weight) * effectivePrice).toFixed(2) : null
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -338,7 +352,11 @@ function AddDonationTab({ products, onAdded }) {
               onChange={e => setForm({ ...form, product_name: e.target.value })}
               className="w-full px-4 py-3 border-2 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none bg-white">
               <option value="">Select produce type...</option>
-              {products.map(p => <option key={p.id} value={p.name}>{p.name} — {formatMoney(p.price_per_lb)}/lb</option>)}
+              {products.map(p => {
+                const sPrice = seasonPriceMap[p.name]
+                const price = sPrice || p.price_per_lb
+                return <option key={p.id} value={p.name}>{p.name} — {formatMoney(price)}/lb{sPrice ? ` (${donationYear})` : ''}</option>
+              })}
             </select>
           </div>
           <div>
@@ -353,6 +371,7 @@ function AddDonationTab({ products, onAdded }) {
             <input type="date" value={form.donation_date}
               onChange={e => setForm({ ...form, donation_date: e.target.value })}
               className="w-full px-4 py-3 border-2 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none" />
+            <p className="text-xs text-gray-400 mt-1">Prices are based on the {donationYear} season rates</p>
           </div>
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">Notes (optional)</label>
@@ -364,7 +383,7 @@ function AddDonationTab({ products, onAdded }) {
 
           {calcValue && (
             <div className="bg-green-50 border-2 border-green-300 rounded-lg p-4">
-              <div className="flex justify-between"><span>Price per pound:</span><span className="font-semibold">{formatMoney(selectedProduct.price_per_lb)}</span></div>
+              <div className="flex justify-between"><span>Price per pound ({donationYear} rate):</span><span className="font-semibold">{formatMoney(effectivePrice)}</span></div>
               <div className="flex justify-between mt-2 text-xl"><span className="font-bold">Calculated Value:</span><span className="font-black text-green-700">{formatMoney(calcValue)}</span></div>
             </div>
           )}
@@ -380,9 +399,31 @@ function AddDonationTab({ products, onAdded }) {
 }
 
 // ─── Manage Products Tab ────────────────────────────────────────────────────
-function ManageProductsTab({ products, onUpdated }) {
+function ManageProductsTab({ products, onUpdated, seasons }) {
   const [newProduct, setNewProduct] = useState({ name: '', price_per_lb: '', category: 'Vegetable' })
   const [message, setMessage] = useState(null)
+  const [priceYear, setPriceYear] = useState(new Date().getFullYear())
+  const [seasonPrices, setSeasonPrices] = useState([])
+  const [editingPrices, setEditingPrices] = useState({})
+  const [priceYears, setPriceYears] = useState([])
+  const [initYear, setInitYear] = useState(new Date().getFullYear())
+
+  // Load available price years and season prices
+  const loadPrices = useCallback(async () => {
+    try {
+      const [years, prices] = await Promise.all([
+        api('/product-prices/years'),
+        api(`/product-prices/for-year/${priceYear}`)
+      ])
+      setPriceYears(years)
+      setSeasonPrices(prices)
+      setEditingPrices({})
+    } catch (err) {
+      console.error('Failed to load prices', err)
+    }
+  }, [priceYear])
+
+  useEffect(() => { loadPrices() }, [loadPrices])
 
   const handleAdd = async (e) => {
     e.preventDefault()
@@ -395,24 +436,79 @@ function ManageProductsTab({ products, onUpdated }) {
       setMessage({ type: 'success', text: `Added "${newProduct.name}" at ${formatMoney(newProduct.price_per_lb)}/lb` })
       setNewProduct({ name: '', price_per_lb: '', category: 'Vegetable' })
       onUpdated()
+      loadPrices()
     } catch (err) {
       setMessage({ type: 'error', text: err.message })
     }
   }
 
-  const cols = [
-    { key: 'name', label: 'Product', bold: true },
-    { key: 'price_per_lb', label: 'Price/lb', right: true, green: true, fmt: v => formatMoney(v) },
-    { key: 'category', label: 'Category' },
-  ]
+  const handlePriceEdit = (productName, newPrice) => {
+    setEditingPrices(prev => ({ ...prev, [productName]: newPrice }))
+  }
+
+  const handleSavePrice = async (productName) => {
+    const newPrice = parseFloat(editingPrices[productName])
+    if (isNaN(newPrice) || newPrice <= 0) return
+    try {
+      await api('/product-prices', {
+        method: 'POST',
+        body: JSON.stringify({ product_name: productName, year: priceYear, price_per_lb: newPrice, source: 'manual' })
+      })
+      setMessage({ type: 'success', text: `Updated ${productName} to ${formatMoney(newPrice)}/lb for ${priceYear}` })
+      setEditingPrices(prev => { const n = { ...prev }; delete n[productName]; return n })
+      loadPrices()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+  }
+
+  const handleInitSeason = async () => {
+    try {
+      const prevYear = priceYears.length > 0 ? Math.max(...priceYears.filter(y => y < initYear)) : null
+      const url = `/product-prices/initialize-season/${initYear}` + (prevYear ? `?source_year=${prevYear}` : '')
+      const result = await api(url, { method: 'POST' })
+      if (result.status === 'skipped') {
+        setMessage({ type: 'error', text: result.message })
+      } else {
+        setMessage({ type: 'success', text: `Initialized ${initYear} season with ${result.products_initialized} product prices!` })
+        setPriceYear(initYear)
+        loadPrices()
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+  }
+
+  const handleSaveAllEdited = async () => {
+    const prices = Object.entries(editingPrices).map(([name, price]) => ({
+      product_name: name, year: priceYear, price_per_lb: parseFloat(price), source: 'manual'
+    })).filter(p => !isNaN(p.price_per_lb) && p.price_per_lb > 0)
+
+    if (prices.length === 0) return
+    try {
+      await api('/product-prices/bulk-update', {
+        method: 'POST',
+        body: JSON.stringify({ year: priceYear, prices })
+      })
+      setMessage({ type: 'success', text: `Updated ${prices.length} prices for ${priceYear} season` })
+      setEditingPrices({})
+      loadPrices()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+  }
+
+  const editCount = Object.keys(editingPrices).length
 
   return (
     <div className="p-6 space-y-6">
+      {message && (
+        <div className={`p-4 rounded-lg text-sm ${message.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>{message.text}</div>
+      )}
+
+      {/* Add New Product */}
       <div className="bg-white rounded-xl shadow p-6 max-w-lg mx-auto">
         <h3 className="text-lg font-bold mb-4">Add New Product</h3>
-        {message && (
-          <div className={`mb-4 p-3 rounded-lg text-sm ${message.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>{message.text}</div>
-        )}
         <form onSubmit={handleAdd} className="flex flex-col sm:flex-row gap-3">
           <input type="text" placeholder="Product name" value={newProduct.name}
             onChange={e => setNewProduct({ ...newProduct, name: e.target.value })}
@@ -427,9 +523,108 @@ function ManageProductsTab({ products, onUpdated }) {
           <button type="submit" className="px-5 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-semibold">Add</button>
         </form>
       </div>
+
+      {/* Initialize New Season */}
+      <div className="bg-blue-50 border-2 border-blue-300 rounded-xl p-6">
+        <h3 className="text-lg font-bold mb-2 text-blue-800">Start a New Season</h3>
+        <p className="text-blue-600 text-sm mb-4">Copy prices from the previous season as a starting point, then adjust as needed.</p>
+        <div className="flex items-center gap-3">
+          <input type="number" value={initYear}
+            onChange={e => setInitYear(parseInt(e.target.value))}
+            className="w-24 px-3 py-2 border-2 rounded-lg outline-none focus:border-blue-500" />
+          <button onClick={handleInitSeason}
+            className="px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold">
+            Initialize {initYear} Season Prices
+          </button>
+        </div>
+      </div>
+
+      {/* Season Price Table */}
       <div className="bg-white rounded-xl shadow overflow-hidden">
-        <div className="bg-amber-600 text-white px-6 py-4"><h2 className="text-xl font-bold">Price Lookup Table ({products.length} products)</h2></div>
-        <SortableTable columns={cols} data={products} pageSize={50} />
+        <div className="bg-amber-600 text-white px-6 py-4 flex items-center justify-between flex-wrap gap-3">
+          <h2 className="text-xl font-bold">Season Pricing ({seasonPrices.length} products)</h2>
+          <div className="flex items-center gap-3">
+            <span className="text-amber-100 text-sm font-medium">Viewing:</span>
+            <select value={priceYear}
+              onChange={e => setPriceYear(parseInt(e.target.value))}
+              className="px-3 py-1.5 rounded-lg text-sm font-semibold text-gray-800 bg-white">
+              {[...new Set([...priceYears, new Date().getFullYear()])].sort((a, b) => b - a).map(y => (
+                <option key={y} value={y}>{y} Season</option>
+              ))}
+            </select>
+            {editCount > 0 && (
+              <button onClick={handleSaveAllEdited}
+                className="px-4 py-1.5 bg-green-500 text-white rounded-lg font-semibold text-sm hover:bg-green-600">
+                Save {editCount} Change{editCount > 1 ? 's' : ''}
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-100 text-left">
+                <th className="px-4 py-3">Product</th>
+                <th className="px-4 py-3">Category</th>
+                <th className="px-4 py-3 text-right">Default Price</th>
+                <th className="px-4 py-3 text-right">{priceYear} Price</th>
+                <th className="px-4 py-3 text-center">Source</th>
+                <th className="px-4 py-3 text-center">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {seasonPrices.map(p => {
+                const isEditing = editingPrices[p.product_name] !== undefined
+                return (
+                  <tr key={p.product_name} className="border-b hover:bg-gray-50">
+                    <td className="px-4 py-3 font-semibold">{p.product_name}</td>
+                    <td className="px-4 py-3 text-gray-500">{p.category}</td>
+                    <td className="px-4 py-3 text-right text-gray-400">{formatMoney(p.default_price)}</td>
+                    <td className="px-4 py-3 text-right">
+                      {isEditing ? (
+                        <input type="number" step="0.01" value={editingPrices[p.product_name]}
+                          onChange={e => handlePriceEdit(p.product_name, e.target.value)}
+                          className="w-24 px-2 py-1 border-2 border-amber-400 rounded text-right outline-none focus:border-amber-600"
+                          autoFocus />
+                      ) : (
+                        <span className={`font-semibold ${p.has_season_price ? 'text-green-700' : 'text-gray-400 italic'}`}>
+                          {formatMoney(p.effective_price)}
+                          {!p.has_season_price && ' *'}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`text-xs px-2 py-1 rounded-full ${
+                        p.source === 'default' ? 'bg-gray-100 text-gray-500' :
+                        p.source === 'manual' ? 'bg-green-100 text-green-700' :
+                        'bg-blue-100 text-blue-700'
+                      }`}>{p.source}</span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      {isEditing ? (
+                        <div className="flex gap-1 justify-center">
+                          <button onClick={() => handleSavePrice(p.product_name)}
+                            className="px-3 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700">Save</button>
+                          <button onClick={() => setEditingPrices(prev => { const n = { ...prev }; delete n[p.product_name]; return n })}
+                            className="px-3 py-1 bg-gray-300 text-gray-700 rounded text-xs hover:bg-gray-400">Cancel</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => handlePriceEdit(p.product_name, p.effective_price.toString())}
+                          className="px-3 py-1 bg-amber-100 text-amber-700 rounded text-xs hover:bg-amber-200 font-semibold">Edit</button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        {seasonPrices.some(p => !p.has_season_price) && (
+          <div className="px-6 py-3 bg-gray-50 text-gray-500 text-xs border-t">
+            * Using default price — no season-specific price set for {priceYear}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -540,11 +735,11 @@ function YearOverYearTab({ seasons, yoyData }) {
 // ─── About This App Tab ──────────────────────────────────────────────────
 function AboutTab() {
   const stats = {
-    totalLines: 1830,
+    totalLines: 2241,
     files: 11,
     languages: [
-      { name: 'Python', lines: 716, color: '#3572A5', usage: 'Backend API, data import scripts' },
-      { name: 'JavaScript (JSX)', lines: 932, color: '#f7df1e', usage: 'Frontend UI, interactive dashboard' },
+      { name: 'Python', lines: 881, color: '#3572A5', usage: 'Backend API, data import scripts' },
+      { name: 'JavaScript (JSX)', lines: 1178, color: '#f7df1e', usage: 'Frontend UI, interactive dashboard' },
       { name: 'SQL', lines: 109, color: '#e38c00', usage: 'Database schema, indexes, seed data' },
       { name: 'HTML', lines: 14, color: '#e34c26', usage: 'Entry point, meta tags' },
       { name: 'CSS', lines: 17, color: '#563d7c', usage: 'Base reset styles' },
@@ -607,7 +802,7 @@ function AboutTab() {
             <div className="text-gray-500 text-sm mt-1">Languages</div>
           </div>
           <div className="bg-gray-50 rounded-lg p-4 text-center">
-            <div className="text-3xl font-black text-green-600">15+</div>
+            <div className="text-3xl font-black text-green-600">20+</div>
             <div className="text-gray-500 text-sm mt-1">API Endpoints</div>
           </div>
         </div>
@@ -717,6 +912,7 @@ function AboutTab() {
             { step: '2', title: 'Local HTML Dashboard', desc: 'Converted to an interactive browser-based dashboard with charts and filtering — zero dependencies.' },
             { step: '3', title: 'Full-Stack Web App', desc: 'Built a Python backend API with PostgreSQL, deployed to Railway, with a React frontend on Vercel.' },
             { step: '4', title: 'Year-over-Year Tracking', desc: 'Added season archival, multi-year comparison charts, and cumulative impact tracking across all years.' },
+            { step: '5', title: 'Season-Specific Pricing & PIN Security', desc: 'Added per-season pricing so historical values are preserved, PIN protection for write access, and an automated pricing research agent.' },
           ].map(item => (
             <div key={item.step} className="flex gap-4 items-start">
               <div className="w-8 h-8 rounded-full bg-green-600 text-white font-bold flex items-center justify-center flex-shrink-0">{item.step}</div>
@@ -958,7 +1154,7 @@ export default function App() {
           {tab === 'yoy' && <YearOverYearTab seasons={seasons} yoyData={yoyData} />}
           {tab === 'donations' && <DonationsTab donations={donations} />}
           {tab === 'add' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><AddDonationTab products={products} onAdded={() => { loadData(); refreshSeasons() }} /></PinGate>}
-          {tab === 'manage' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><ManageProductsTab products={products} onUpdated={loadData} /></PinGate>}
+          {tab === 'manage' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><ManageProductsTab products={products} onUpdated={loadData} seasons={seasons} /></PinGate>}
           {tab === 'about' && <AboutTab />}
         </main>
       )}
