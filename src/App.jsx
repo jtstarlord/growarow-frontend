@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from 'react'
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const APP_PIN = import.meta.env.VITE_APP_PIN || '2025'
 const COLORS = ['#16a34a','#2563eb','#d97706','#dc2626','#7c3aed','#db2777','#0d9488','#ea580c','#4f46e5','#059669']
 
 async function api(path, options = {}) {
@@ -731,6 +732,55 @@ function AboutTab() {
   )
 }
 
+// ─── PIN Gate ────────────────────────────────────────────────────────────────
+function PinGate({ children, unlocked, onUnlock }) {
+  const [pin, setPin] = useState('')
+  const [error, setError] = useState(false)
+
+  if (unlocked) return children
+
+  const handleSubmit = (e) => {
+    e.preventDefault()
+    if (pin === APP_PIN) {
+      onUnlock()
+      setError(false)
+    } else {
+      setError(true)
+      setPin('')
+    }
+  }
+
+  return (
+    <div className="p-6 max-w-sm mx-auto mt-8">
+      <div className="bg-white rounded-xl shadow p-8 text-center">
+        <div className="text-4xl mb-3">🔒</div>
+        <h2 className="text-xl font-bold text-gray-800 mb-2">PIN Required</h2>
+        <p className="text-gray-500 text-sm mb-6">Enter the volunteer PIN to add or edit data.</p>
+        {error && (
+          <div className="mb-4 p-3 rounded-lg bg-red-50 text-red-700 text-sm border border-red-200">
+            Incorrect PIN. Please try again.
+          </div>
+        )}
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <input
+            type="password"
+            value={pin}
+            onChange={e => { setPin(e.target.value); setError(false) }}
+            placeholder="Enter PIN"
+            className="w-full px-4 py-3 border-2 rounded-lg text-center text-2xl tracking-widest outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
+            autoFocus
+          />
+          <button type="submit"
+            className="w-full py-3 rounded-lg font-bold text-white bg-green-600 hover:bg-green-700 transition-colors">
+            Unlock
+          </button>
+        </form>
+        <p className="text-gray-400 text-xs mt-4">Contact your Grow-A-Row coordinator for the PIN.</p>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main App ───────────────────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState('overview')
@@ -744,6 +794,7 @@ export default function App() {
   const [selectedYear, setSelectedYear] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [pinUnlocked, setPinUnlocked] = useState(false)
 
   const [filterDonor, setFilterDonor] = useState('')
   const [filterProduct, setFilterProduct] = useState('')
@@ -906,8 +957,8 @@ export default function App() {
           {tab === 'trends' && <TrendsTab donations={donations} />}
           {tab === 'yoy' && <YearOverYearTab seasons={seasons} yoyData={yoyData} />}
           {tab === 'donations' && <DonationsTab donations={donations} />}
-          {tab === 'add' && <AddDonationTab products={products} onAdded={() => { loadData(); refreshSeasons() }} />}
-          {tab === 'manage' && <ManageProductsTab products={products} onUpdated={loadData} />}
+          {tab === 'add' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><AddDonationTab products={products} onAdded={() => { loadData(); refreshSeasons() }} /></PinGate>}
+          {tab === 'manage' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><ManageProductsTab products={products} onUpdated={loadData} /></PinGate>}
           {tab === 'about' && <AboutTab />}
         </main>
       )}
