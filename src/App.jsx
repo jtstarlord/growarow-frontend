@@ -1271,16 +1271,18 @@ const REPORT_TYPES = [
   { id: 'ytd-donors', label: 'YTD by Donor', daily: false, desc: 'Season-to-date produce by donor, with per-donor subtotals.' },
   { id: 'ytd-customers', label: 'YTD by Customer', daily: false, desc: 'Season-to-date produce delivered to each receiving organization.' },
   { id: 'ytd-produce', label: 'YTD Produce Summary', daily: false, desc: 'Season-to-date totals for every produce type.' },
+  { id: 'donor-history', label: 'Donor History', daily: false, donor: true, desc: 'One donor\'s full season — every donation in order plus a produce summary. Share it with the donor as a record of their impact.' },
 ]
 
 function reportRows3(l) { return [l.product_name, l.items ?? '—', formatNum(l.weight), formatMoney(l.value)] }
 
-function ReportsTab({ seasons }) {
+function ReportsTab({ seasons, donors }) {
   const today = new Date().toISOString().slice(0, 10)
   const currentYear = new Date().getFullYear()
   const [reportType, setReportType] = useState('daily-summary')
   const [selDate, setSelDate] = useState(today)
   const [selYear, setSelYear] = useState(currentYear)
+  const [selDonor, setSelDonor] = useState('')
   const [availDates, setAvailDates] = useState([])
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -1294,18 +1296,23 @@ function ReportsTab({ seasons }) {
   }, [selDate])
 
   useEffect(() => {
-    setLoading(true)
     setError(null)
     setData(null)  // old report's shape must not render under the new type
-    const path = rt.daily
-      ? `/reports/${reportType}/${selDate}`
-      : `/reports/ytd/${reportType.replace('ytd-', '')}?year=${selYear}`
+    if (rt.donor && !selDonor) { setLoading(false); return }
+    setLoading(true)
+    const path = rt.donor
+      ? `/reports/donor-history?donor=${encodeURIComponent(selDonor)}&year=${selYear}`
+      : rt.daily
+        ? `/reports/${reportType}/${selDate}`
+        : `/reports/ytd/${reportType.replace('ytd-', '')}?year=${selYear}`
     api(path).then(d => { setData(d); setLoading(false) }).catch(err => { setError(err.message); setData(null); setLoading(false) })
-  }, [reportType, selDate, selYear])
+  }, [reportType, selDate, selYear, selDonor])
 
-  const title = rt.daily
-    ? `${rt.label} — ${new Date(selDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}`
-    : `${rt.label} — ${selYear} Season`
+  const title = rt.donor
+    ? `Donation History — ${selDonor || 'select a donor'} — ${selYear} Season`
+    : rt.daily
+      ? `${rt.label} — ${new Date(selDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}`
+      : `${rt.label} — ${selYear} Season`
 
   const downloadPdf = async () => {
     const { default: jsPDF } = await import('jspdf')
@@ -1344,6 +1351,15 @@ function ReportsTab({ seasons }) {
       tbl(['Product', '# Items', 'Weight (lbs)', 'Value'],
         data.rows.map(reportRows3),
         data.totals ? totalsFoot('TOTAL', data.totals) : null)
+    } else if (reportType === 'donor-history') {
+      tbl(['Date', 'Product', '# Items', 'Weight (lbs)', 'Value'],
+        data.lines.map(l => [new Date(l.date + 'T12:00:00').toLocaleDateString(), l.product_name, l.items ?? '—', formatNum(l.weight), formatMoney(l.value)]),
+        data.totals ? ['SEASON TOTAL', '', data.totals.items ?? '—', formatNum(data.totals.weight), formatMoney(data.totals.value)] : null)
+      doc.setFontSize(11); doc.setTextColor(60); doc.text('Produce Summary', 14, y); y += 4
+      tbl(['Product', '# Donations', '# Items', 'Weight (lbs)', 'Value'],
+        data.summary.map(s => [s.product_name, s.donations, s.items ?? '—', formatNum(s.weight), formatMoney(s.value)]))
+      doc.setFontSize(10); doc.setTextColor(22, 101, 52)
+      doc.text(`Thank you, ${data.donor_name}, for fighting food insecurity with us!`, 14, y)
     } else {
       const groups = reportType === 'daily-donors' ? data.donors : data.groups
       groups.forEach(g => {
@@ -1358,7 +1374,7 @@ function ReportsTab({ seasons }) {
         doc.text(`GRAND TOTAL: ${formatNum(data.totals.weight)} lbs · ${formatMoney(data.totals.value)}${data.totals.items ? ` · ${data.totals.items} items` : ''}`, 14, y)
       }
     }
-    doc.save(`GrowARow_${reportType}_${rt.daily ? selDate : selYear}.pdf`)
+    doc.save(`GrowARow_${reportType}_${rt.donor ? selDonor.replace(/[^A-Za-z0-9]+/g, '_') + '_' + selYear : rt.daily ? selDate : selYear}.pdf`)
   }
 
   const Th = ({ children, right }) => <th className={`px-4 py-2 ${right ? 'text-right' : 'text-left'}`}>{children}</th>
@@ -1388,7 +1404,22 @@ function ReportsTab({ seasons }) {
         </div>
         <p className="text-sm text-gray-500 mb-4">{rt.desc}</p>
         <div className="flex flex-wrap items-center gap-3">
-          {rt.daily ? (
+          {rt.donor && (
+            <>
+              <label className="text-sm font-semibold text-gray-500">Donor:</label>
+              <select value={selDonor} onChange={e => setSelDonor(e.target.value)}
+                className="px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500 bg-white">
+                <option value="">Select a donor...</option>
+                {donors.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
+              </select>
+              <label className="text-sm font-semibold text-gray-500">Season:</label>
+              <select value={selYear} onChange={e => setSelYear(parseInt(e.target.value))}
+                className="px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500 bg-white">
+                {years.map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </>
+          )}
+          {!rt.donor && rt.daily ? (
             <>
               <label className="text-sm font-semibold text-gray-500">Pickup day:</label>
               <input type="date" value={selDate} onChange={e => setSelDate(e.target.value)}
@@ -1401,7 +1432,7 @@ function ReportsTab({ seasons }) {
                 </select>
               )}
             </>
-          ) : (
+          ) : !rt.donor ? (
             <>
               <label className="text-sm font-semibold text-gray-500">Season:</label>
               <select value={selYear} onChange={e => setSelYear(parseInt(e.target.value))}
@@ -1409,7 +1440,7 @@ function ReportsTab({ seasons }) {
                 {years.map(y => <option key={y} value={y}>{y}</option>)}
               </select>
             </>
-          )}
+          ) : null}
           {hasData && (
             <button onClick={downloadPdf}
               className="ml-auto px-5 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-semibold text-sm">
@@ -1423,7 +1454,11 @@ function ReportsTab({ seasons }) {
         <div className="bg-green-700 text-white px-6 py-4"><h2 className="text-lg font-bold">{title}</h2></div>
         {loading && <p className="p-6 text-gray-400">Loading report…</p>}
         {error && <p className="p-6 text-red-600">{error}</p>}
-        {!loading && !error && !hasData && <p className="p-6 text-gray-400 italic">No data for this {rt.daily ? 'day' : 'season'} yet.</p>}
+        {!loading && !error && !hasData && (
+          <p className="p-6 text-gray-400 italic">
+            {rt.donor && !selDonor ? 'Select a donor above to view their donation history.' : `No data for this ${rt.daily ? 'day' : 'season'} yet.`}
+          </p>
+        )}
 
         {!loading && !error && hasData && (
           <div className="overflow-x-auto">
@@ -1456,6 +1491,35 @@ function ReportsTab({ seasons }) {
                     </table>
                   </div>
                 )}
+              </>
+            )}
+
+            {reportType === 'donor-history' && data.lines && (
+              <>
+                <table className="w-full text-sm">
+                  <thead><tr className="bg-gray-100"><Th>Date</Th><Th>Product</Th><Th right># Items</Th><Th right>Weight (lbs)</Th><Th right>Value</Th></tr></thead>
+                  <tbody>
+                    {data.lines.map((l, i) => (
+                      <tr key={i} className="border-b hover:bg-gray-50">
+                        <Td>{new Date(l.date + 'T12:00:00').toLocaleDateString()}</Td><Td bold>{l.product_name}</Td><Td right>{l.items ?? '—'}</Td><Td right>{formatNum(l.weight)}</Td><Td right green>{formatMoney(l.value)}</Td>
+                      </tr>
+                    ))}
+                    {data.totals && <TotalsRow label="SEASON TOTAL" t={data.totals} span={2} />}
+                  </tbody>
+                </table>
+                <div className="border-t-4 border-green-100">
+                  <div className="px-6 py-3 bg-green-50 font-bold text-green-800 text-sm">Produce Summary</div>
+                  <table className="w-full text-sm">
+                    <thead><tr className="bg-gray-100"><Th>Product</Th><Th right># Donations</Th><Th right># Items</Th><Th right>Weight (lbs)</Th><Th right>Value</Th></tr></thead>
+                    <tbody>
+                      {data.summary.map((s, i) => (
+                        <tr key={i} className="border-b hover:bg-gray-50">
+                          <Td bold>{s.product_name}</Td><Td right>{s.donations}</Td><Td right>{s.items ?? '—'}</Td><Td right>{formatNum(s.weight)}</Td><Td right green>{formatMoney(s.value)}</Td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </>
             )}
 
@@ -1937,7 +2001,7 @@ export default function App() {
           {tab === 'donations' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><DonationsTab donations={donations} products={products} donors={donors} onChanged={() => { loadData(); refreshSeasons() }} /></PinGate>}
           {tab === 'add' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><AddDonationTab products={products} donors={donors} onAdded={() => { loadData(); refreshSeasons() }} /></PinGate>}
           {tab === 'distributions' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><DistributionsTab products={products} onChanged={loadData} /></PinGate>}
-          {tab === 'reports' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><ReportsTab seasons={seasons} /></PinGate>}
+          {tab === 'reports' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><ReportsTab seasons={seasons} donors={donors} /></PinGate>}
           {tab === 'manage' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><ManageProductsTab products={products} onUpdated={loadData} seasons={seasons} /></PinGate>}
           {tab === 'about' && <AboutTab />}
         </main>
