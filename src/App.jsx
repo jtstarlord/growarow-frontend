@@ -5,9 +5,14 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 const APP_PIN = import.meta.env.VITE_APP_PIN || '2025'
 const COLORS = ['#16a34a','#2563eb','#d97706','#dc2626','#7c3aed','#db2777','#0d9488','#ea580c','#4f46e5','#059669']
 
+// The PIN doubles as the API key: the backend rejects any write without it,
+// so unlocking the UI alone is not enough to modify data.
+let apiPin = sessionStorage.getItem('gar_pin') || ''
+function setApiPin(pin) { apiPin = pin; sessionStorage.setItem('gar_pin', pin) }
+
 async function api(path, options = {}) {
   const res = await fetch(`${API_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
+    headers: { 'Content-Type': 'application/json', ...(apiPin ? { 'X-API-Key': apiPin } : {}), ...options.headers },
     ...options,
   })
   if (!res.ok) {
@@ -169,7 +174,46 @@ function OverviewTab({ metrics, donorStats, productStats }) {
 }
 
 // ─── Donors Tab ─────────────────────────────────────────────────────────────
-function DonorsTab({ donorStats }) {
+function DonorsTab({ donorStats, onChanged }) {
+  const [allDonors, setAllDonors] = useState([])
+  const [showManage, setShowManage] = useState(false)
+  const [newDonor, setNewDonor] = useState({ name: '', phone: '', address: '' })
+  const [editingDonor, setEditingDonor] = useState(null)
+  const [message, setMessage] = useState(null)
+
+  const loadDonors = useCallback(() => {
+    api('/donors?include_inactive=true').then(setAllDonors).catch(() => {})
+  }, [])
+  useEffect(() => { loadDonors() }, [loadDonors])
+
+  const act = async (fn, successText) => {
+    try {
+      await fn()
+      setMessage({ type: 'success', text: successText })
+      loadDonors()
+      onChanged()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+  }
+
+  const handleAdd = (e) => {
+    e.preventDefault()
+    if (!newDonor.name.trim()) return
+    act(async () => {
+      await api('/donors', { method: 'POST', body: JSON.stringify({ ...newDonor, name: newDonor.name.trim() }) })
+      setNewDonor({ name: '', phone: '', address: '' })
+    }, `Added donor "${newDonor.name.trim()}"`)
+  }
+
+  const handleSaveEdit = () => {
+    const d = editingDonor
+    act(async () => {
+      await api(`/donors/${d.id}`, { method: 'PUT', body: JSON.stringify({ name: d.name.trim(), phone: d.phone || null, address: d.address || null }) })
+      setEditingDonor(null)
+    }, `Updated "${d.name.trim()}"`)
+  }
+
   const cols = [
     { key: 'donor_name', label: 'Donor', bold: true },
     { key: 'total_value', label: 'Total Value', right: true, green: true, fmt: v => formatMoney(v) },
@@ -179,11 +223,102 @@ function DonorsTab({ donorStats }) {
     { key: 'avg', label: 'Avg/Donation', right: true, fmt: (_, row) => formatMoney(row.total_value / row.total_donations) },
   ]
   return (
-    <div className="p-6">
+    <div className="p-6 space-y-6">
+      {message && (
+        <div className={`p-3 rounded-lg text-sm ${message.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>{message.text}</div>
+      )}
       <div className="bg-white rounded-xl shadow overflow-hidden">
-        <div className="bg-green-600 text-white px-6 py-4"><h2 className="text-xl font-bold">All Donors ({donorStats.length})</h2></div>
+        <div className="bg-green-600 text-white px-6 py-4 flex items-center justify-between">
+          <h2 className="text-xl font-bold">All Donors ({donorStats.length})</h2>
+          <button onClick={() => setShowManage(!showManage)}
+            className="px-4 py-1.5 bg-white text-green-700 rounded-lg text-sm font-semibold hover:bg-green-50">
+            {showManage ? 'Hide Donor List' : 'Manage Donor List'}
+          </button>
+        </div>
         <SortableTable columns={cols} data={donorStats} pageSize={50} />
       </div>
+
+      {showManage && (
+        <div className="bg-white rounded-xl shadow overflow-hidden">
+          <div className="bg-gray-700 text-white px-6 py-4"><h2 className="text-xl font-bold">Donor List ({allDonors.length})</h2></div>
+          <div className="p-4 border-b bg-gray-50">
+            <form onSubmit={handleAdd} className="flex flex-col sm:flex-row gap-2">
+              <input type="text" placeholder="Full name or organization *" value={newDonor.name}
+                onChange={e => setNewDonor({ ...newDonor, name: e.target.value })}
+                className="flex-1 px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500" />
+              <input type="text" placeholder="Phone (optional)" value={newDonor.phone}
+                onChange={e => setNewDonor({ ...newDonor, phone: e.target.value })}
+                className="w-40 px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500" />
+              <input type="text" placeholder="Address (optional)" value={newDonor.address}
+                onChange={e => setNewDonor({ ...newDonor, address: e.target.value })}
+                className="flex-1 px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500" />
+              <button type="submit" className="px-5 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-semibold">Add Donor</button>
+            </form>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-100 text-left">
+                  <th className="px-4 py-3">Name</th>
+                  <th className="px-4 py-3">Phone</th>
+                  <th className="px-4 py-3">Address</th>
+                  <th className="px-4 py-3 text-center">Status</th>
+                  <th className="px-4 py-3 text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {allDonors.map(d => {
+                  const isEditing = editingDonor?.id === d.id
+                  return (
+                    <tr key={d.id} className={`border-b hover:bg-gray-50 ${!d.active ? 'opacity-50' : ''}`}>
+                      <td className="px-4 py-2 font-semibold">
+                        {isEditing ? <input value={editingDonor.name} onChange={e => setEditingDonor({ ...editingDonor, name: e.target.value })}
+                          className="w-full px-2 py-1 border-2 border-amber-400 rounded outline-none" autoFocus /> : d.name}
+                      </td>
+                      <td className="px-4 py-2 text-gray-500">
+                        {isEditing ? <input value={editingDonor.phone || ''} onChange={e => setEditingDonor({ ...editingDonor, phone: e.target.value })}
+                          className="w-full px-2 py-1 border-2 border-amber-400 rounded outline-none" /> : (d.phone || '—')}
+                      </td>
+                      <td className="px-4 py-2 text-gray-500">
+                        {isEditing ? <input value={editingDonor.address || ''} onChange={e => setEditingDonor({ ...editingDonor, address: e.target.value })}
+                          className="w-full px-2 py-1 border-2 border-amber-400 rounded outline-none" /> : (d.address || '—')}
+                      </td>
+                      <td className="px-4 py-2 text-center">
+                        <span className={`text-xs px-2 py-1 rounded-full ${d.active ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'}`}>
+                          {d.active ? 'Active' : 'Inactive'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-center">
+                        {isEditing ? (
+                          <div className="flex gap-1 justify-center">
+                            <button onClick={handleSaveEdit} className="px-3 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700">Save</button>
+                            <button onClick={() => setEditingDonor(null)} className="px-3 py-1 bg-gray-300 text-gray-700 rounded text-xs hover:bg-gray-400">Cancel</button>
+                          </div>
+                        ) : (
+                          <div className="flex gap-1 justify-center">
+                            <button onClick={() => setEditingDonor({ ...d })}
+                              className="px-3 py-1 bg-amber-100 text-amber-700 rounded text-xs hover:bg-amber-200 font-semibold">Edit</button>
+                            {d.active ? (
+                              <button onClick={() => act(() => api(`/donors/${d.id}/deactivate`, { method: 'POST' }), `Deactivated "${d.name}" — past donations are kept`)}
+                                className="px-3 py-1 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Deactivate</button>
+                            ) : (
+                              <button onClick={() => act(() => api(`/donors/${d.id}/reactivate`, { method: 'POST' }), `Reactivated "${d.name}"`)}
+                                className="px-3 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200 font-semibold">Reactivate</button>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-6 py-3 bg-gray-50 text-gray-500 text-xs border-t">
+            Deactivated donors disappear from the entry dropdown but keep all their donation history in reports.
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -264,51 +399,172 @@ function TrendsTab({ donations }) {
 }
 
 // ─── All Donations Tab ──────────────────────────────────────────────────────
-function DonationsTab({ donations }) {
-  const cols = [
-    { key: 'donation_date', label: 'Date', fmt: v => new Date(v + 'T12:00:00').toLocaleDateString() },
-    { key: 'donor_name', label: 'Donor', bold: true },
-    { key: 'product_name', label: 'Product' },
-    { key: 'weight', label: 'Weight (lbs)', right: true, fmt: v => formatNum(v) },
-    { key: 'price_per_lb', label: 'Price/lb', right: true, fmt: v => formatMoney(v) },
-    { key: 'total_value', label: 'Value', right: true, green: true, fmt: v => formatMoney(v) },
-  ]
+function EditDonationModal({ donation, products, donors, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    donor_name: donation.donor_name,
+    product_name: donation.product_name,
+    weight: String(donation.weight),
+    item_count: donation.item_count != null ? String(donation.item_count) : '',
+    donation_date: donation.donation_date,
+    notes: donation.notes || '',
+  })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+
+  const handleSave = async () => {
+    setSaving(true)
+    setError(null)
+    try {
+      await api(`/donations/${donation.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          ...form,
+          weight: parseFloat(form.weight),
+          item_count: form.item_count ? parseInt(form.item_count) : null,
+        }),
+      })
+      onSaved()
+      onClose()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
-    <div className="p-6">
-      <div className="bg-white rounded-xl shadow overflow-hidden">
-        <div className="bg-gray-700 text-white px-6 py-4"><h2 className="text-xl font-bold">All Donations ({donations.length})</h2></div>
-        <SortableTable columns={cols} data={donations} pageSize={25} />
+    <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <h3 className="text-xl font-bold mb-4 text-gray-800">Edit Donation #{donation.id}</h3>
+        {error && <div className="mb-3 p-3 rounded-lg bg-red-50 text-red-700 text-sm border border-red-200">{error}</div>}
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Donor</label>
+            <select value={form.donor_name} onChange={e => setForm({ ...form, donor_name: e.target.value })}
+              className="w-full px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500 bg-white">
+              {!donors.some(d => d.name === form.donor_name) && <option value={form.donor_name}>{form.donor_name}</option>}
+              {donors.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Product</label>
+            <select value={form.product_name} onChange={e => setForm({ ...form, product_name: e.target.value })}
+              className="w-full px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500 bg-white">
+              {products.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Weight (lbs)</label>
+              <input type="number" step="0.1" min="0" value={form.weight} onChange={e => setForm({ ...form, weight: e.target.value })}
+                className="w-full px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1"># Items</label>
+              <input type="number" step="1" min="0" value={form.item_count} onChange={e => setForm({ ...form, item_count: e.target.value })}
+                className="w-full px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500" placeholder="—" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Date</label>
+              <input type="date" value={form.donation_date} onChange={e => setForm({ ...form, donation_date: e.target.value })}
+                className="w-full px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Notes</label>
+            <textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows="2"
+              className="w-full px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500" />
+          </div>
+          <p className="text-xs text-gray-400">Value is recalculated from the price in effect on the donation date.</p>
+        </div>
+        <div className="flex gap-3 mt-5">
+          <button onClick={handleSave} disabled={saving}
+            className="flex-1 py-2.5 rounded-lg font-bold text-white bg-green-600 hover:bg-green-700 disabled:bg-gray-400">
+            {saving ? 'Saving...' : 'Save Changes'}
+          </button>
+          <button onClick={onClose} className="px-5 py-2.5 rounded-lg bg-gray-200 text-gray-700 hover:bg-gray-300">Cancel</button>
+        </div>
       </div>
     </div>
   )
 }
 
+function DonationsTab({ donations, products, donors, onChanged }) {
+  const [editing, setEditing] = useState(null)
+  const [message, setMessage] = useState(null)
+
+  const handleDelete = async (row) => {
+    if (!window.confirm(`Delete this donation?\n\n${row.donation_date}: ${row.weight} lbs of ${row.product_name} from ${row.donor_name}`)) return
+    try {
+      await api(`/donations/${row.id}`, { method: 'DELETE' })
+      setMessage({ type: 'success', text: 'Donation deleted.' })
+      onChanged()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+  }
+
+  const cols = [
+    { key: 'donation_date', label: 'Date', fmt: v => new Date(v + 'T12:00:00').toLocaleDateString() },
+    { key: 'donor_name', label: 'Donor', bold: true },
+    { key: 'product_name', label: 'Product' },
+    { key: 'item_count', label: '# Items', right: true, fmt: v => v ?? '—' },
+    { key: 'weight', label: 'Weight (lbs)', right: true, fmt: v => formatNum(v) },
+    { key: 'price_per_lb', label: 'Price/lb', right: true, fmt: v => formatMoney(v) },
+    { key: 'total_value', label: 'Value', right: true, green: true, fmt: v => formatMoney(v) },
+    { key: 'id', label: 'Actions', right: true, fmt: (_, row) => (
+      <div className="flex gap-1 justify-end">
+        <button onClick={() => setEditing(row)}
+          className="px-2.5 py-1 bg-amber-100 text-amber-700 rounded text-xs hover:bg-amber-200 font-semibold">Edit</button>
+        <button onClick={() => handleDelete(row)}
+          className="px-2.5 py-1 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Delete</button>
+      </div>
+    ) },
+  ]
+  return (
+    <div className="p-6">
+      {message && (
+        <div className={`mb-4 p-3 rounded-lg text-sm ${message.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>{message.text}</div>
+      )}
+      <div className="bg-white rounded-xl shadow overflow-hidden">
+        <div className="bg-gray-700 text-white px-6 py-4"><h2 className="text-xl font-bold">All Donations ({donations.length})</h2></div>
+        <SortableTable columns={cols} data={donations} pageSize={25} />
+      </div>
+      {editing && (
+        <EditDonationModal donation={editing} products={products} donors={donors}
+          onClose={() => setEditing(null)} onSaved={() => { setMessage({ type: 'success', text: 'Donation updated.' }); onChanged() }} />
+      )}
+    </div>
+  )
+}
+
 // ─── Add Donation Tab ───────────────────────────────────────────────────────
-function AddDonationTab({ products, onAdded }) {
-  const [form, setForm] = useState({ donor_name: '', product_name: '', weight: '', donation_date: new Date().toISOString().slice(0, 10), notes: '' })
+function AddDonationTab({ products, donors, onAdded }) {
+  const [form, setForm] = useState({ donor_name: '', product_name: '', weight: '', item_count: '', donation_date: new Date().toISOString().slice(0, 10), notes: '' })
+  const [newDonorMode, setNewDonorMode] = useState(false)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState(null)
-  const [seasonPriceMap, setSeasonPriceMap] = useState({})
+  const [priceMap, setPriceMap] = useState({})
 
-  // Load season-specific prices when date changes
-  const donationYear = form.donation_date ? parseInt(form.donation_date.slice(0, 4)) : new Date().getFullYear()
+  // Prices are effective-dated: load the price of every product as of the donation date
   useEffect(() => {
-    api(`/product-prices/for-year/${donationYear}`)
+    if (!form.donation_date) return
+    api(`/product-prices/for-date/${form.donation_date}`)
       .then(prices => {
         const map = {}
         prices.forEach(p => { map[p.product_name] = p.effective_price })
-        setSeasonPriceMap(map)
+        setPriceMap(map)
       })
       .catch(() => {})
-  }, [donationYear])
+  }, [form.donation_date])
 
   const selectedProduct = products.find(p => p.name === form.product_name)
-  const effectivePrice = seasonPriceMap[form.product_name] || (selectedProduct ? selectedProduct.price_per_lb : null)
+  const effectivePrice = priceMap[form.product_name] || (selectedProduct ? selectedProduct.price_per_lb : null)
   const calcValue = effectivePrice && form.weight ? (parseFloat(form.weight) * effectivePrice).toFixed(2) : null
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!form.donor_name || !form.product_name || !form.weight) {
+    if (!form.donor_name.trim() || !form.product_name || !form.weight) {
       setMessage({ type: 'error', text: 'Please fill in all required fields.' })
       return
     }
@@ -317,10 +573,16 @@ function AddDonationTab({ products, onAdded }) {
     try {
       await api('/donations', {
         method: 'POST',
-        body: JSON.stringify({ ...form, weight: parseFloat(form.weight) }),
+        body: JSON.stringify({
+          ...form,
+          donor_name: form.donor_name.trim(),
+          weight: parseFloat(form.weight),
+          item_count: form.item_count ? parseInt(form.item_count) : null,
+        }),
       })
       setMessage({ type: 'success', text: `Donation recorded! ${form.weight} lbs of ${form.product_name} from ${form.donor_name} (${formatMoney(calcValue)})` })
-      setForm({ donor_name: '', product_name: '', weight: '', donation_date: new Date().toISOString().slice(0, 10), notes: '' })
+      setForm({ donor_name: '', product_name: '', weight: '', item_count: '', donation_date: form.donation_date, notes: '' })
+      setNewDonorMode(false)
       onAdded()
     } catch (err) {
       setMessage({ type: 'error', text: err.message })
@@ -340,11 +602,29 @@ function AddDonationTab({ products, onAdded }) {
         )}
         <form onSubmit={handleSubmit} className="space-y-5">
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">Donor Name *</label>
-            <input type="text" value={form.donor_name}
-              onChange={e => setForm({ ...form, donor_name: e.target.value })}
-              className="w-full px-4 py-3 border-2 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
-              placeholder="e.g. Kathy Stott" />
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Donor *</label>
+            {newDonorMode ? (
+              <div className="flex gap-2">
+                <input type="text" value={form.donor_name}
+                  onChange={e => setForm({ ...form, donor_name: e.target.value })}
+                  className="flex-1 px-4 py-3 border-2 border-green-400 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
+                  placeholder="New donor name or organization" autoFocus />
+                <button type="button" onClick={() => { setNewDonorMode(false); setForm({ ...form, donor_name: '' }) }}
+                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300">Cancel</button>
+              </div>
+            ) : (
+              <select value={form.donor_name}
+                onChange={e => {
+                  if (e.target.value === '__new__') { setNewDonorMode(true); setForm({ ...form, donor_name: '' }) }
+                  else setForm({ ...form, donor_name: e.target.value })
+                }}
+                className="w-full px-4 py-3 border-2 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none bg-white">
+                <option value="">Select donor...</option>
+                {donors.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
+                <option value="__new__">➕ Add a new donor...</option>
+              </select>
+            )}
+            {newDonorMode && <p className="text-xs text-green-600 mt-1">The new donor is saved automatically with this donation.</p>}
           </div>
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">Product *</label>
@@ -353,25 +633,33 @@ function AddDonationTab({ products, onAdded }) {
               className="w-full px-4 py-3 border-2 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none bg-white">
               <option value="">Select produce type...</option>
               {products.map(p => {
-                const sPrice = seasonPriceMap[p.name]
-                const price = sPrice || p.price_per_lb
-                return <option key={p.id} value={p.name}>{p.name} — {formatMoney(price)}/lb{sPrice ? ` (${donationYear})` : ''}</option>
+                const price = priceMap[p.name] || p.price_per_lb
+                return <option key={p.id} value={p.name}>{p.name} — {formatMoney(price)}/lb</option>
               })}
             </select>
           </div>
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">Weight (lbs) *</label>
-            <input type="number" step="0.01" min="0" value={form.weight}
-              onChange={e => setForm({ ...form, weight: e.target.value })}
-              className="w-full px-4 py-3 border-2 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
-              placeholder="0.00" />
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">Weight (lbs) *</label>
+              <input type="number" step="0.1" min="0" value={form.weight}
+                onChange={e => setForm({ ...form, weight: e.target.value })}
+                className="w-full px-4 py-3 border-2 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
+                placeholder="0.0" />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1"># of Items</label>
+              <input type="number" step="1" min="0" value={form.item_count}
+                onChange={e => setForm({ ...form, item_count: e.target.value })}
+                className="w-full px-4 py-3 border-2 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
+                placeholder="optional" />
+            </div>
           </div>
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">Date *</label>
             <input type="date" value={form.donation_date}
               onChange={e => setForm({ ...form, donation_date: e.target.value })}
               className="w-full px-4 py-3 border-2 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none" />
-            <p className="text-xs text-gray-400 mt-1">Prices are based on the {donationYear} season rates</p>
+            <p className="text-xs text-gray-400 mt-1">Value uses the price in effect on this date</p>
           </div>
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">Notes (optional)</label>
@@ -383,7 +671,7 @@ function AddDonationTab({ products, onAdded }) {
 
           {calcValue && (
             <div className="bg-green-50 border-2 border-green-300 rounded-lg p-4">
-              <div className="flex justify-between"><span>Price per pound ({donationYear} rate):</span><span className="font-semibold">{formatMoney(effectivePrice)}</span></div>
+              <div className="flex justify-between"><span>Price per pound:</span><span className="font-semibold">{formatMoney(effectivePrice)}</span></div>
               <div className="flex justify-between mt-2 text-xl"><span className="font-bold">Calculated Value:</span><span className="font-black text-green-700">{formatMoney(calcValue)}</span></div>
             </div>
           )}
@@ -732,6 +1020,493 @@ function YearOverYearTab({ seasons, yoyData }) {
   )
 }
 
+// ─── Distributions Tab ──────────────────────────────────────────────────────
+// End-of-day allocation: all produce received on a pickup day is pooled, then
+// divided among the receiving organizations. Not tied to individual donors.
+function DistributionsTab({ products, onChanged }) {
+  const today = new Date().toISOString().slice(0, 10)
+  const [selDate, setSelDate] = useState(today)
+  const [dayStatus, setDayStatus] = useState(null)
+  const [dayDists, setDayDists] = useState([])
+  const [recipients, setRecipients] = useState([])
+  const [form, setForm] = useState({ recipient_name: '', product_name: '', weight: '', item_count: '' })
+  const [newRecipient, setNewRecipient] = useState('')
+  const [showRecipients, setShowRecipients] = useState(false)
+  const [message, setMessage] = useState(null)
+  const [saving, setSaving] = useState(false)
+
+  const loadDay = useCallback(() => {
+    api(`/distributions/day-status/${selDate}`).then(setDayStatus).catch(() => setDayStatus(null))
+    api(`/distributions?on_date=${selDate}`).then(setDayDists).catch(() => setDayDists([]))
+  }, [selDate])
+  const loadRecipients = useCallback(() => {
+    api('/recipients?include_inactive=true').then(setRecipients).catch(() => {})
+  }, [])
+  useEffect(() => { loadDay() }, [loadDay])
+  useEffect(() => { loadRecipients() }, [loadRecipients])
+
+  const activeRecipients = recipients.filter(r => r.active)
+  const receivedProducts = dayStatus?.products || []
+
+  const handleAllocate = async (e) => {
+    e.preventDefault()
+    if (!form.recipient_name || !form.product_name || !form.weight) {
+      setMessage({ type: 'error', text: 'Recipient, product, and weight are required.' })
+      return
+    }
+    setSaving(true)
+    try {
+      await api('/distributions', {
+        method: 'POST',
+        body: JSON.stringify({
+          distribution_date: selDate,
+          recipient_name: form.recipient_name,
+          product_name: form.product_name,
+          weight: parseFloat(form.weight),
+          item_count: form.item_count ? parseInt(form.item_count) : null,
+        }),
+      })
+      setMessage({ type: 'success', text: `Allocated ${form.weight} lbs of ${form.product_name} to ${form.recipient_name}` })
+      setForm({ recipient_name: form.recipient_name, product_name: '', weight: '', item_count: '' })
+      loadDay()
+      onChanged()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDeleteDist = async (d) => {
+    if (!window.confirm(`Remove allocation of ${d.weight} lbs ${d.product_name} to ${d.recipient_name}?`)) return
+    try {
+      await api(`/distributions/${d.id}`, { method: 'DELETE' })
+      loadDay()
+      onChanged()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+  }
+
+  const handleAddRecipient = async (e) => {
+    e.preventDefault()
+    if (!newRecipient.trim()) return
+    try {
+      await api('/recipients', { method: 'POST', body: JSON.stringify({ name: newRecipient.trim() }) })
+      setNewRecipient('')
+      loadRecipients()
+      setMessage({ type: 'success', text: `Added receiving organization "${newRecipient.trim()}"` })
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+  }
+
+  return (
+    <div className="p-6 space-y-6">
+      {message && (
+        <div className={`p-3 rounded-lg text-sm ${message.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>{message.text}</div>
+      )}
+
+      <div className="bg-white rounded-xl shadow p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <h2 className="text-xl font-bold text-gray-800">End-of-Day Distribution</h2>
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-semibold text-gray-500">Date:</label>
+            <input type="date" value={selDate} onChange={e => setSelDate(e.target.value)}
+              className="px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500" />
+          </div>
+        </div>
+        <p className="text-sm text-gray-500 mb-4">
+          Divide the day's pooled produce among receiving organizations. Allocations power the customer reports.
+        </p>
+
+        {/* Received vs allocated */}
+        {receivedProducts.length === 0 && dayDists.length === 0 ? (
+          <p className="text-gray-400 italic py-4 text-center">No donations recorded for {selDate} yet.</p>
+        ) : (
+          <div className="overflow-x-auto mb-6">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-100 text-left">
+                  <th className="px-4 py-2">Product</th>
+                  <th className="px-4 py-2 text-right">Received (lbs)</th>
+                  <th className="px-4 py-2 text-right">Allocated (lbs)</th>
+                  <th className="px-4 py-2 text-right">Remaining (lbs)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {receivedProducts.map(p => (
+                  <tr key={p.product_name} className="border-b">
+                    <td className="px-4 py-2 font-semibold">{p.product_name}</td>
+                    <td className="px-4 py-2 text-right">{formatNum(p.received_weight)}</td>
+                    <td className="px-4 py-2 text-right">{formatNum(p.allocated_weight)}</td>
+                    <td className={`px-4 py-2 text-right font-semibold ${p.remaining_weight < 0 ? 'text-red-600' : p.remaining_weight === 0 ? 'text-gray-400' : 'text-green-700'}`}>
+                      {formatNum(p.remaining_weight)}{p.remaining_weight < 0 && ' ⚠️'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {receivedProducts.some(p => p.remaining_weight < 0) && (
+              <p className="text-xs text-red-600 mt-2">⚠️ More was allocated than received — double-check the weights.</p>
+            )}
+          </div>
+        )}
+
+        {/* Allocation form */}
+        <form onSubmit={handleAllocate} className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end bg-green-50 border border-green-200 rounded-lg p-4">
+          <div className="sm:col-span-1">
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Deliver to *</label>
+            <select value={form.recipient_name} onChange={e => setForm({ ...form, recipient_name: e.target.value })}
+              className="w-full px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500 bg-white">
+              <option value="">Select...</option>
+              {activeRecipients.map(r => <option key={r.id} value={r.name}>{r.name}</option>)}
+            </select>
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Product *</label>
+            <select value={form.product_name} onChange={e => setForm({ ...form, product_name: e.target.value })}
+              className="w-full px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500 bg-white">
+              <option value="">Select...</option>
+              {receivedProducts.length > 0 && (
+                <optgroup label={`Received on ${selDate}`}>
+                  {receivedProducts.map(p => <option key={p.product_name} value={p.product_name}>{p.product_name} ({formatNum(p.remaining_weight)} lbs left)</option>)}
+                </optgroup>
+              )}
+              <optgroup label="All products">
+                {products.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+              </optgroup>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Weight (lbs) *</label>
+            <input type="number" step="0.1" min="0" value={form.weight} onChange={e => setForm({ ...form, weight: e.target.value })}
+              className="w-full px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500" placeholder="0.0" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1"># Items</label>
+            <input type="number" step="1" min="0" value={form.item_count} onChange={e => setForm({ ...form, item_count: e.target.value })}
+              className="w-full px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500" placeholder="opt." />
+          </div>
+          <button type="submit" disabled={saving}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 font-semibold sm:col-span-5 lg:col-span-1">
+            {saving ? 'Saving...' : 'Allocate'}
+          </button>
+        </form>
+      </div>
+
+      {/* Day's allocations */}
+      {dayDists.length > 0 && (
+        <div className="bg-white rounded-xl shadow overflow-hidden">
+          <div className="bg-blue-600 text-white px-6 py-4"><h2 className="text-lg font-bold">Allocations for {selDate} ({dayDists.length})</h2></div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-100 text-left">
+                  <th className="px-4 py-2">Recipient</th>
+                  <th className="px-4 py-2">Product</th>
+                  <th className="px-4 py-2 text-right"># Items</th>
+                  <th className="px-4 py-2 text-right">Weight (lbs)</th>
+                  <th className="px-4 py-2 text-right">Value</th>
+                  <th className="px-4 py-2 text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dayDists.map(d => (
+                  <tr key={d.id} className="border-b hover:bg-gray-50">
+                    <td className="px-4 py-2 font-semibold">{d.recipient_name}</td>
+                    <td className="px-4 py-2">{d.product_name}</td>
+                    <td className="px-4 py-2 text-right">{d.item_count ?? '—'}</td>
+                    <td className="px-4 py-2 text-right">{formatNum(d.weight)}</td>
+                    <td className="px-4 py-2 text-right text-green-700 font-semibold">{formatMoney(d.total_value)}</td>
+                    <td className="px-4 py-2 text-center">
+                      <button onClick={() => handleDeleteDist(d)}
+                        className="px-2.5 py-1 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Remove</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Manage receiving organizations */}
+      <div className="bg-white rounded-xl shadow p-6">
+        <button onClick={() => setShowRecipients(!showRecipients)} className="text-sm font-semibold text-blue-600 hover:text-blue-800">
+          {showRecipients ? '▾' : '▸'} Manage Receiving Organizations ({activeRecipients.length})
+        </button>
+        {showRecipients && (
+          <div className="mt-4 space-y-3">
+            <form onSubmit={handleAddRecipient} className="flex gap-2">
+              <input type="text" placeholder="New organization name" value={newRecipient}
+                onChange={e => setNewRecipient(e.target.value)}
+                className="flex-1 px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500" />
+              <button type="submit" className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-semibold">Add</button>
+            </form>
+            {recipients.map(r => (
+              <div key={r.id} className={`flex items-center justify-between px-3 py-2 rounded-lg border ${r.active ? 'bg-gray-50' : 'bg-gray-100 opacity-60'}`}>
+                <span className="font-semibold text-sm">{r.name}</span>
+                {r.active ? (
+                  <button onClick={async () => { await api(`/recipients/${r.id}/deactivate`, { method: 'POST' }).catch(err => setMessage({ type: 'error', text: err.message })); loadRecipients() }}
+                    className="px-3 py-1 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Deactivate</button>
+                ) : (
+                  <button onClick={async () => { await api('/recipients', { method: 'POST', body: JSON.stringify({ name: r.name }) }).catch(err => setMessage({ type: 'error', text: err.message })); loadRecipients() }}
+                    className="px-3 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200 font-semibold">Reactivate</button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Reports Tab ────────────────────────────────────────────────────────────
+const REPORT_TYPES = [
+  { id: 'daily', label: 'Daily Chronological', daily: true, desc: 'Every donation line for a pickup day, in entry order, plus that day\'s distributions.' },
+  { id: 'daily-summary', label: 'Daily Produce Summary', daily: true, desc: 'One row per produce type for a day — for public reporting and social media.' },
+  { id: 'daily-donors', label: 'Daily Donor Report', daily: true, desc: 'The day\'s donations grouped by donor, largest first, with a day total.' },
+  { id: 'ytd-donors', label: 'YTD by Donor', daily: false, desc: 'Season-to-date produce by donor, with per-donor subtotals.' },
+  { id: 'ytd-customers', label: 'YTD by Customer', daily: false, desc: 'Season-to-date produce delivered to each receiving organization.' },
+  { id: 'ytd-produce', label: 'YTD Produce Summary', daily: false, desc: 'Season-to-date totals for every produce type.' },
+]
+
+function reportRows3(l) { return [l.product_name, l.items ?? '—', formatNum(l.weight), formatMoney(l.value)] }
+
+function ReportsTab({ seasons }) {
+  const today = new Date().toISOString().slice(0, 10)
+  const currentYear = new Date().getFullYear()
+  const [reportType, setReportType] = useState('daily-summary')
+  const [selDate, setSelDate] = useState(today)
+  const [selYear, setSelYear] = useState(currentYear)
+  const [availDates, setAvailDates] = useState([])
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+
+  const rt = REPORT_TYPES.find(r => r.id === reportType)
+  const years = [...new Set([...(seasons || []).map(s => s.year), currentYear])].sort((a, b) => b - a)
+
+  useEffect(() => {
+    api(`/reports/dates?year=${selDate.slice(0, 4)}`).then(setAvailDates).catch(() => {})
+  }, [selDate])
+
+  useEffect(() => {
+    setLoading(true)
+    setError(null)
+    setData(null)  // old report's shape must not render under the new type
+    const path = rt.daily
+      ? `/reports/${reportType}/${selDate}`
+      : `/reports/ytd/${reportType.replace('ytd-', '')}?year=${selYear}`
+    api(path).then(d => { setData(d); setLoading(false) }).catch(err => { setError(err.message); setData(null); setLoading(false) })
+  }, [reportType, selDate, selYear])
+
+  const title = rt.daily
+    ? `${rt.label} — ${new Date(selDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}`
+    : `${rt.label} — ${selYear} Season`
+
+  const downloadPdf = async () => {
+    const { default: jsPDF } = await import('jspdf')
+    const autoTable = (await import('jspdf-autotable')).default
+    const doc = new jsPDF()
+    doc.setFontSize(18)
+    doc.setTextColor(22, 101, 52)
+    doc.text('Grow-A-Row', 14, 18)
+    doc.setFontSize(12)
+    doc.setTextColor(60)
+    doc.text(title, 14, 26)
+    doc.setFontSize(9)
+    doc.setTextColor(130)
+    doc.text(`Generated ${new Date().toLocaleDateString()} · Fresh Produce Donation Tracker`, 14, 32)
+    let y = 38
+
+    const tbl = (head, body, foot) => {
+      autoTable(doc, { startY: y, head: [head], body, foot: foot ? [foot] : undefined,
+        theme: 'striped', headStyles: { fillColor: [22, 101, 52] }, footStyles: { fillColor: [240, 253, 244], textColor: [22, 101, 52], fontStyle: 'bold' },
+        styles: { fontSize: 9 } })
+      y = doc.lastAutoTable.finalY + 8
+    }
+    const totalsFoot = (label, t) => [label, t.items ?? '—', formatNum(t.weight), formatMoney(t.value)]
+
+    if (reportType === 'daily') {
+      tbl(['Donor', 'Product', '# Items', 'Weight (lbs)', 'Value'],
+        data.lines.map(l => [l.donor_name, l.product_name, l.items ?? '—', formatNum(l.weight), formatMoney(l.value)]),
+        data.totals ? ['DAY TOTAL', '', data.totals.items ?? '—', formatNum(data.totals.weight), formatMoney(data.totals.value)] : null)
+      if (data.distributions.length > 0) {
+        doc.setFontSize(11); doc.setTextColor(60); doc.text('Distributed to Receiving Organizations', 14, y); y += 4
+        tbl(['Recipient', 'Product', '# Items', 'Weight (lbs)', 'Value'],
+          data.distributions.map(l => [l.recipient_name, l.product_name, l.items ?? '—', formatNum(l.weight), formatMoney(l.value)]),
+          data.distribution_totals ? ['TOTAL', '', data.distribution_totals.items ?? '—', formatNum(data.distribution_totals.weight), formatMoney(data.distribution_totals.value)] : null)
+      }
+    } else if (reportType === 'daily-summary' || reportType === 'ytd-produce') {
+      tbl(['Product', '# Items', 'Weight (lbs)', 'Value'],
+        data.rows.map(reportRows3),
+        data.totals ? totalsFoot('TOTAL', data.totals) : null)
+    } else {
+      const groups = reportType === 'daily-donors' ? data.donors : data.groups
+      groups.forEach(g => {
+        const name = g.donor_name || g.name
+        doc.setFontSize(11); doc.setTextColor(30); doc.text(name, 14, y); y += 4
+        tbl(['Product', '# Items', 'Weight (lbs)', 'Value'],
+          g.lines.map(reportRows3),
+          totalsFoot('Subtotal', g.subtotal))
+      })
+      if (data.totals) {
+        doc.setFontSize(12); doc.setTextColor(22, 101, 52)
+        doc.text(`GRAND TOTAL: ${formatNum(data.totals.weight)} lbs · ${formatMoney(data.totals.value)}${data.totals.items ? ` · ${data.totals.items} items` : ''}`, 14, y)
+      }
+    }
+    doc.save(`GrowARow_${reportType}_${rt.daily ? selDate : selYear}.pdf`)
+  }
+
+  const Th = ({ children, right }) => <th className={`px-4 py-2 ${right ? 'text-right' : 'text-left'}`}>{children}</th>
+  const Td = ({ children, right, bold, green }) => <td className={`px-4 py-2 ${right ? 'text-right' : ''} ${bold ? 'font-semibold' : ''} ${green ? 'text-green-700 font-semibold' : ''}`}>{children}</td>
+  const TotalsRow = ({ label, t, span }) => (
+    <tr className="bg-green-50 font-bold text-green-800 border-t-2 border-green-300">
+      <Td bold>{label}</Td>
+      {span > 1 && <Td />}
+      <Td right>{t.items ?? '—'}</Td>
+      <Td right>{formatNum(t.weight)}</Td>
+      <Td right>{formatMoney(t.value)}</Td>
+    </tr>
+  )
+
+  const hasData = data && ((data.lines?.length) || (data.rows?.length) || (data.donors?.length) || (data.groups?.length))
+
+  return (
+    <div className="p-6 space-y-6">
+      <div className="bg-white rounded-xl shadow p-6">
+        <div className="flex flex-wrap gap-2 mb-4">
+          {REPORT_TYPES.map(r => (
+            <button key={r.id} onClick={() => { setData(null); setReportType(r.id) }}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${reportType === r.id ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-green-100'}`}>
+              {r.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-sm text-gray-500 mb-4">{rt.desc}</p>
+        <div className="flex flex-wrap items-center gap-3">
+          {rt.daily ? (
+            <>
+              <label className="text-sm font-semibold text-gray-500">Pickup day:</label>
+              <input type="date" value={selDate} onChange={e => setSelDate(e.target.value)}
+                className="px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500" />
+              {availDates.length > 0 && (
+                <select value={availDates.includes(selDate) ? selDate : ''} onChange={e => e.target.value && setSelDate(e.target.value)}
+                  className="px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500 bg-white text-sm">
+                  <option value="">Jump to a day with donations...</option>
+                  {availDates.map(d => <option key={d} value={d}>{new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</option>)}
+                </select>
+              )}
+            </>
+          ) : (
+            <>
+              <label className="text-sm font-semibold text-gray-500">Season:</label>
+              <select value={selYear} onChange={e => setSelYear(parseInt(e.target.value))}
+                className="px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500 bg-white">
+                {years.map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </>
+          )}
+          {hasData && (
+            <button onClick={downloadPdf}
+              className="ml-auto px-5 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-semibold text-sm">
+              ⬇ Download PDF
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl shadow overflow-hidden">
+        <div className="bg-green-700 text-white px-6 py-4"><h2 className="text-lg font-bold">{title}</h2></div>
+        {loading && <p className="p-6 text-gray-400">Loading report…</p>}
+        {error && <p className="p-6 text-red-600">{error}</p>}
+        {!loading && !error && !hasData && <p className="p-6 text-gray-400 italic">No data for this {rt.daily ? 'day' : 'season'} yet.</p>}
+
+        {!loading && !error && hasData && (
+          <div className="overflow-x-auto">
+            {reportType === 'daily' && data.lines && (
+              <>
+                <table className="w-full text-sm">
+                  <thead><tr className="bg-gray-100"><Th>Donor</Th><Th>Product</Th><Th right># Items</Th><Th right>Weight (lbs)</Th><Th right>Value</Th></tr></thead>
+                  <tbody>
+                    {data.lines.map((l, i) => (
+                      <tr key={i} className="border-b hover:bg-gray-50">
+                        <Td bold>{l.donor_name}</Td><Td>{l.product_name}</Td><Td right>{l.items ?? '—'}</Td><Td right>{formatNum(l.weight)}</Td><Td right green>{formatMoney(l.value)}</Td>
+                      </tr>
+                    ))}
+                    {data.totals && <TotalsRow label="DAY TOTAL" t={data.totals} span={2} />}
+                  </tbody>
+                </table>
+                {data.distributions.length > 0 && (
+                  <div className="border-t-4 border-blue-100">
+                    <div className="px-6 py-3 bg-blue-50 font-bold text-blue-800 text-sm">Distributed to Receiving Organizations</div>
+                    <table className="w-full text-sm">
+                      <thead><tr className="bg-gray-100"><Th>Recipient</Th><Th>Product</Th><Th right># Items</Th><Th right>Weight (lbs)</Th><Th right>Value</Th></tr></thead>
+                      <tbody>
+                        {data.distributions.map((l, i) => (
+                          <tr key={i} className="border-b hover:bg-gray-50">
+                            <Td bold>{l.recipient_name}</Td><Td>{l.product_name}</Td><Td right>{l.items ?? '—'}</Td><Td right>{formatNum(l.weight)}</Td><Td right green>{formatMoney(l.value)}</Td>
+                          </tr>
+                        ))}
+                        {data.distribution_totals && <TotalsRow label="TOTAL" t={data.distribution_totals} span={2} />}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+
+            {(reportType === 'daily-summary' || reportType === 'ytd-produce') && data.rows && (
+              <table className="w-full text-sm">
+                <thead><tr className="bg-gray-100"><Th>Product</Th><Th right># Items</Th><Th right>Weight (lbs)</Th><Th right>Value</Th></tr></thead>
+                <tbody>
+                  {data.rows.map((l, i) => (
+                    <tr key={i} className="border-b hover:bg-gray-50">
+                      <Td bold>{l.product_name}</Td><Td right>{l.items ?? '—'}</Td><Td right>{formatNum(l.weight)}</Td><Td right green>{formatMoney(l.value)}</Td>
+                    </tr>
+                  ))}
+                  {data.totals && <TotalsRow label="TOTAL" t={data.totals} span={1} />}
+                </tbody>
+              </table>
+            )}
+
+            {(reportType === 'daily-donors' || reportType === 'ytd-donors' || reportType === 'ytd-customers') && (
+              <div>
+                {((reportType === 'daily-donors' ? data.donors : data.groups) || []).map((g, gi) => (
+                  <div key={gi} className="border-b-4 border-gray-100">
+                    <div className="px-6 py-3 bg-gray-50 font-bold text-gray-800">{g.donor_name || g.name}</div>
+                    <table className="w-full text-sm">
+                      <tbody>
+                        {g.lines.map((l, i) => (
+                          <tr key={i} className="border-b hover:bg-gray-50">
+                            <Td>{l.product_name}</Td><Td right>{l.items ?? '—'}</Td><Td right>{formatNum(l.weight)}</Td><Td right green>{formatMoney(l.value)}</Td>
+                          </tr>
+                        ))}
+                        <TotalsRow label="Subtotal" t={g.subtotal} span={1} />
+                      </tbody>
+                    </table>
+                  </div>
+                ))}
+                {data.totals && (
+                  <div className="px-6 py-4 bg-green-100 font-black text-green-800 text-lg flex flex-wrap gap-x-8">
+                    <span>GRAND TOTAL</span>
+                    {data.totals.items && <span>{data.totals.items.toLocaleString()} items</span>}
+                    <span>{formatNum(data.totals.weight)} lbs</span>
+                    <span>{formatMoney(data.totals.value)}</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── About This App Tab ──────────────────────────────────────────────────
 function AboutTab() {
   const stats = {
@@ -913,6 +1688,7 @@ function AboutTab() {
             { step: '3', title: 'Full-Stack Web App', desc: 'Built a Python backend API with PostgreSQL, deployed to Railway, with a React frontend on Vercel.' },
             { step: '4', title: 'Year-over-Year Tracking', desc: 'Added season archival, multi-year comparison charts, and cumulative impact tracking across all years.' },
             { step: '5', title: 'Season-Specific Pricing & PIN Security', desc: 'Added per-season pricing so historical values are preserved, PIN protection for write access, and an automated pricing research agent.' },
+            { step: '6', title: 'Distributions, Reports & Full Editing', desc: 'Added end-of-day distribution tracking to receiving organizations, six printable/PDF reports, donor management with add-on-the-spot entry, item counts, mid-season price changes, and server-side PIN enforcement.' },
           ].map(item => (
             <div key={item.step} className="flex gap-4 items-start">
               <div className="w-8 h-8 rounded-full bg-green-600 text-white font-bold flex items-center justify-center flex-shrink-0">{item.step}</div>
@@ -938,6 +1714,7 @@ function PinGate({ children, unlocked, onUnlock }) {
   const handleSubmit = (e) => {
     e.preventDefault()
     if (pin === APP_PIN) {
+      setApiPin(pin)
       onUnlock()
       setError(false)
     } else {
@@ -985,12 +1762,13 @@ export default function App() {
   const [productStats, setProductStats] = useState([])
   const [donations, setDonations] = useState([])
   const [products, setProducts] = useState([])
+  const [donors, setDonors] = useState([])
   const [seasons, setSeasons] = useState([])
   const [yoyData, setYoyData] = useState(null)
   const [selectedYear, setSelectedYear] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [pinUnlocked, setPinUnlocked] = useState(false)
+  const [pinUnlocked, setPinUnlocked] = useState(() => apiPin === APP_PIN)
 
   const [filterDonor, setFilterDonor] = useState('')
   const [filterProduct, setFilterProduct] = useState('')
@@ -1022,18 +1800,20 @@ export default function App() {
       const qs = params.toString() ? '?' + params.toString() : ''
       const yearParam = selectedYear && !filterFrom && !filterTo ? `?year=${selectedYear}` : ''
 
-      const [m, ds, ps, d, pr] = await Promise.all([
+      const [m, ds, ps, d, pr, dn] = await Promise.all([
         api('/metrics' + qs),
         api('/stats/donors/by-year' + yearParam),
         api('/stats/products/by-year' + yearParam),
         api('/donations' + qs),
         api('/products'),
+        api('/donors'),
       ])
       setMetrics(m)
       setDonorStats(ds)
       setProductStats(ps)
       setDonations(d)
       setProducts(pr)
+      setDonors(dn)
       setError(null)
     } catch (err) {
       setError(err.message)
@@ -1057,6 +1837,8 @@ export default function App() {
     { id: 'yoy', label: 'Year over Year', icon: '📅' },
     { id: 'donations', label: 'All Donations', icon: '📋' },
     { id: 'add', label: 'Add Donation', icon: '➕' },
+    { id: 'distributions', label: 'Distributions', icon: '🚚' },
+    { id: 'reports', label: 'Reports', icon: '📄' },
     { id: 'manage', label: 'Manage Products', icon: '⚙️' },
     { id: 'about', label: 'About', icon: 'ℹ️' },
   ]
@@ -1148,12 +1930,14 @@ export default function App() {
       {!loading && !error && (
         <main className="max-w-7xl mx-auto">
           {tab === 'overview' && <OverviewTab metrics={metrics} donorStats={donorStats} productStats={productStats} />}
-          {tab === 'donors' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><DonorsTab donorStats={donorStats} /></PinGate>}
+          {tab === 'donors' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><DonorsTab donorStats={donorStats} onChanged={loadData} /></PinGate>}
           {tab === 'products' && <ProductsTab productStats={productStats} />}
           {tab === 'trends' && <TrendsTab donations={donations} />}
           {tab === 'yoy' && <YearOverYearTab seasons={seasons} yoyData={yoyData} />}
-          {tab === 'donations' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><DonationsTab donations={donations} /></PinGate>}
-          {tab === 'add' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><AddDonationTab products={products} onAdded={() => { loadData(); refreshSeasons() }} /></PinGate>}
+          {tab === 'donations' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><DonationsTab donations={donations} products={products} donors={donors} onChanged={() => { loadData(); refreshSeasons() }} /></PinGate>}
+          {tab === 'add' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><AddDonationTab products={products} donors={donors} onAdded={() => { loadData(); refreshSeasons() }} /></PinGate>}
+          {tab === 'distributions' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><DistributionsTab products={products} onChanged={loadData} /></PinGate>}
+          {tab === 'reports' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><ReportsTab seasons={seasons} /></PinGate>}
           {tab === 'manage' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><ManageProductsTab products={products} onUpdated={loadData} seasons={seasons} /></PinGate>}
           {tab === 'about' && <AboutTab />}
         </main>
