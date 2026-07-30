@@ -713,6 +713,35 @@ function ManageProductsTab({ products, onUpdated, seasons }) {
 
   useEffect(() => { loadPrices() }, [loadPrices])
 
+  // Product list management (rename / deactivate) — includes retired products
+  const [allProducts, setAllProducts] = useState([])
+  const [showList, setShowList] = useState(false)
+  const [editingProduct, setEditingProduct] = useState(null)
+  const loadAllProducts = useCallback(() => {
+    api('/products?include_inactive=true').then(setAllProducts).catch(() => {})
+  }, [])
+  useEffect(() => { loadAllProducts() }, [loadAllProducts])
+
+  const productAct = async (fn, successText) => {
+    try {
+      await fn()
+      setMessage({ type: 'success', text: successText })
+      loadAllProducts()
+      loadPrices()
+      onUpdated()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+  }
+
+  const handleSaveProductEdit = () => {
+    const p = editingProduct
+    productAct(async () => {
+      await api(`/products/${p.id}`, { method: 'PUT', body: JSON.stringify({ name: p.name.trim(), category: p.category }) })
+      setEditingProduct(null)
+    }, `Updated "${p.name.trim()}" — donation history follows the new name`)
+  }
+
   const handleAdd = async (e) => {
     e.preventDefault()
     if (!newProduct.name || !newProduct.price_per_lb) return
@@ -810,7 +839,80 @@ function ManageProductsTab({ products, onUpdated, seasons }) {
           </select>
           <button type="submit" className="px-5 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-semibold">Add</button>
         </form>
+        <div className="mt-3 text-right">
+          <button onClick={() => setShowList(!showList)} className="text-sm font-semibold text-blue-600 hover:text-blue-800">
+            {showList ? '▾' : '▸'} Rename or Retire Products ({allProducts.length})
+          </button>
+        </div>
       </div>
+
+      {/* Product List Management */}
+      {showList && (
+        <div className="bg-white rounded-xl shadow overflow-hidden">
+          <div className="bg-gray-700 text-white px-6 py-4"><h2 className="text-xl font-bold">Product List ({allProducts.length})</h2></div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-100 text-left">
+                  <th className="px-4 py-3">Name</th>
+                  <th className="px-4 py-3">Category</th>
+                  <th className="px-4 py-3 text-center">Status</th>
+                  <th className="px-4 py-3 text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {allProducts.map(p => {
+                  const isEditing = editingProduct?.id === p.id
+                  return (
+                    <tr key={p.id} className={`border-b hover:bg-gray-50 ${p.active === false ? 'opacity-50' : ''}`}>
+                      <td className="px-4 py-2 font-semibold">
+                        {isEditing ? <input value={editingProduct.name} onChange={e => setEditingProduct({ ...editingProduct, name: e.target.value })}
+                          className="w-full px-2 py-1 border-2 border-amber-400 rounded outline-none" autoFocus /> : p.name}
+                      </td>
+                      <td className="px-4 py-2 text-gray-500">
+                        {isEditing ? (
+                          <select value={editingProduct.category || 'Vegetable'} onChange={e => setEditingProduct({ ...editingProduct, category: e.target.value })}
+                            className="px-2 py-1 border-2 border-amber-400 rounded outline-none bg-white">
+                            <option>Vegetable</option><option>Fruit</option><option>Herbs</option>
+                          </select>
+                        ) : (p.category || '—')}
+                      </td>
+                      <td className="px-4 py-2 text-center">
+                        <span className={`text-xs px-2 py-1 rounded-full ${p.active !== false ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'}`}>
+                          {p.active !== false ? 'Active' : 'Retired'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-center">
+                        {isEditing ? (
+                          <div className="flex gap-1 justify-center">
+                            <button onClick={handleSaveProductEdit} className="px-3 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700">Save</button>
+                            <button onClick={() => setEditingProduct(null)} className="px-3 py-1 bg-gray-300 text-gray-700 rounded text-xs hover:bg-gray-400">Cancel</button>
+                          </div>
+                        ) : (
+                          <div className="flex gap-1 justify-center">
+                            <button onClick={() => setEditingProduct({ ...p })}
+                              className="px-3 py-1 bg-amber-100 text-amber-700 rounded text-xs hover:bg-amber-200 font-semibold">Rename</button>
+                            {p.active !== false ? (
+                              <button onClick={() => productAct(() => api(`/products/${p.id}/deactivate`, { method: 'POST' }), `Retired "${p.name}" — history is kept, hidden from entry forms`)}
+                                className="px-3 py-1 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Retire</button>
+                            ) : (
+                              <button onClick={() => productAct(() => api(`/products/${p.id}/reactivate`, { method: 'POST' }), `Restored "${p.name}"`)}
+                                className="px-3 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200 font-semibold">Restore</button>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-6 py-3 bg-gray-50 text-gray-500 text-xs border-t">
+            Renaming a product updates its entire donation history to the new name. Retiring hides it from entry forms but keeps all past donations and reports intact.
+          </div>
+        </div>
+      )}
 
       {/* Initialize New Season */}
       <div className="bg-blue-50 border-2 border-blue-300 rounded-xl p-6">
@@ -1991,7 +2093,7 @@ export default function App() {
       )}
 
       {/* Content */}
-      {!loading && !error && (
+      {!error && (metrics || !loading) && (
         <main className="max-w-7xl mx-auto">
           {tab === 'overview' && <OverviewTab metrics={metrics} donorStats={donorStats} productStats={productStats} />}
           {tab === 'donors' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><DonorsTab donorStats={donorStats} onChanged={loadData} /></PinGate>}
