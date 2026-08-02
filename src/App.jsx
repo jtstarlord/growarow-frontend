@@ -49,6 +49,22 @@ async function verifyPin(pin) {
 function formatMoney(n) { return '$' + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
 function formatNum(n) { return Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 }) }
 
+// CSV download built from data already on screen — opens straight into Excel
+function downloadCsv(filename, headers, rows) {
+  const esc = v => {
+    if (v === null || v === undefined) return ''
+    const s = String(v)
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  const csv = [headers, ...rows].map(r => r.map(esc).join(',')).join('\r\n')
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
 // ─── Metric Card ────────────────────────────────────────────────────────────
 function MetricCard({ label, value, sub, accent }) {
   return (
@@ -123,6 +139,8 @@ function SortableTable({ columns, data, pageSize = 20 }) {
 
 // ─── Overview Tab ───────────────────────────────────────────────────────────
 function OverviewTab({ metrics, donorStats, productStats }) {
+  const [impact, setImpact] = useState({ servings_per_lb: 2.5, dollars_per_meal: 3 })
+  useEffect(() => { api('/settings').then(setImpact).catch(() => {}) }, [])
   if (!metrics) return <p className="p-6 text-gray-500">Loading...</p>
   return (
     <div className="space-y-8 p-6">
@@ -139,12 +157,12 @@ function OverviewTab({ metrics, donorStats, productStats }) {
           <div>
             <div className="text-5xl font-black text-green-700">{metrics.servings_provided?.toLocaleString()}</div>
             <div className="text-gray-600 mt-2 text-lg">Servings Provided</div>
-            <div className="text-gray-400 text-sm">2.5 servings per pound</div>
+            <div className="text-gray-400 text-sm">{impact.servings_per_lb} servings per pound</div>
           </div>
           <div>
             <div className="text-5xl font-black text-green-700">{metrics.meals_funded?.toLocaleString()}</div>
             <div className="text-gray-600 mt-2 text-lg">Meals Funded</div>
-            <div className="text-gray-400 text-sm">Based on $3 per meal</div>
+            <div className="text-gray-400 text-sm">Based on ${impact.dollars_per_meal} per meal</div>
           </div>
           <div>
             <div className="text-5xl font-black text-green-700">{metrics.unique_products}</div>
@@ -201,7 +219,7 @@ function OverviewTab({ metrics, donorStats, productStats }) {
 function DonorsTab({ donorStats, onChanged }) {
   const [allDonors, setAllDonors] = useState([])
   const [showManage, setShowManage] = useState(false)
-  const [newDonor, setNewDonor] = useState({ name: '', phone: '', address: '' })
+  const [newDonor, setNewDonor] = useState({ name: '', phone: '', email: '', address: '' })
   const [editingDonor, setEditingDonor] = useState(null)
   const [message, setMessage] = useState(null)
 
@@ -226,14 +244,14 @@ function DonorsTab({ donorStats, onChanged }) {
     if (!newDonor.name.trim()) return
     act(async () => {
       await api('/donors', { method: 'POST', body: JSON.stringify({ ...newDonor, name: newDonor.name.trim() }) })
-      setNewDonor({ name: '', phone: '', address: '' })
+      setNewDonor({ name: '', phone: '', email: '', address: '' })
     }, `Added donor "${newDonor.name.trim()}"`)
   }
 
   const handleSaveEdit = () => {
     const d = editingDonor
     act(async () => {
-      await api(`/donors/${d.id}`, { method: 'PUT', body: JSON.stringify({ name: d.name.trim(), phone: d.phone || null, address: d.address || null }) })
+      await api(`/donors/${d.id}`, { method: 'PUT', body: JSON.stringify({ name: d.name.trim(), phone: d.phone || null, email: d.email || null, address: d.address || null }) })
       setEditingDonor(null)
     }, `Updated "${d.name.trim()}"`)
   }
@@ -273,6 +291,9 @@ function DonorsTab({ donorStats, onChanged }) {
               <input type="text" placeholder="Phone (optional)" value={newDonor.phone}
                 onChange={e => setNewDonor({ ...newDonor, phone: e.target.value })}
                 className="w-40 px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500" />
+              <input type="email" placeholder="Email (optional)" value={newDonor.email}
+                onChange={e => setNewDonor({ ...newDonor, email: e.target.value })}
+                className="w-48 px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500" />
               <input type="text" placeholder="Address (optional)" value={newDonor.address}
                 onChange={e => setNewDonor({ ...newDonor, address: e.target.value })}
                 className="flex-1 px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500" />
@@ -285,6 +306,7 @@ function DonorsTab({ donorStats, onChanged }) {
                 <tr className="bg-gray-100 text-left">
                   <th className="px-4 py-3">Name</th>
                   <th className="px-4 py-3">Phone</th>
+                  <th className="px-4 py-3">Email</th>
                   <th className="px-4 py-3">Address</th>
                   <th className="px-4 py-3 text-center">Status</th>
                   <th className="px-4 py-3 text-center">Actions</th>
@@ -302,6 +324,10 @@ function DonorsTab({ donorStats, onChanged }) {
                       <td className="px-4 py-2 text-gray-500">
                         {isEditing ? <input value={editingDonor.phone || ''} onChange={e => setEditingDonor({ ...editingDonor, phone: e.target.value })}
                           className="w-full px-2 py-1 border-2 border-amber-400 rounded outline-none" /> : (d.phone || '—')}
+                      </td>
+                      <td className="px-4 py-2 text-gray-500">
+                        {isEditing ? <input type="email" value={editingDonor.email || ''} onChange={e => setEditingDonor({ ...editingDonor, email: e.target.value })}
+                          className="w-full px-2 py-1 border-2 border-amber-400 rounded outline-none" /> : (d.email || '—')}
                       </td>
                       <td className="px-4 py-2 text-gray-500">
                         {isEditing ? <input value={editingDonor.address || ''} onChange={e => setEditingDonor({ ...editingDonor, address: e.target.value })}
@@ -552,12 +578,126 @@ function DonationsTab({ donations, products, donors, onChanged }) {
         <div className={`mb-4 p-3 rounded-lg text-sm ${message.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>{message.text}</div>
       )}
       <div className="bg-white rounded-xl shadow overflow-hidden">
-        <div className="bg-gray-700 text-white px-6 py-4"><h2 className="text-xl font-bold">All Donations ({donations.length})</h2></div>
+        <div className="bg-gray-700 text-white px-6 py-4 flex items-center justify-between">
+          <h2 className="text-xl font-bold">All Donations ({donations.length})</h2>
+          <button onClick={() => downloadCsv(`GrowARow_donations_${localToday()}.csv`,
+            ['Date', 'Donor', 'Product', 'Items', 'Weight (lbs)', 'Price/lb', 'Value', 'Notes'],
+            donations.map(d => [d.donation_date, d.donor_name, d.product_name, d.item_count ?? '', d.weight, d.price_per_lb, d.total_value, d.notes ?? '']))}
+            className="px-4 py-1.5 bg-white text-gray-700 rounded-lg text-sm font-semibold hover:bg-gray-100">⬇ CSV</button>
+        </div>
         <SortableTable columns={cols} data={donations} pageSize={25} />
       </div>
       {editing && (
         <EditDonationModal donation={editing} products={products} donors={donors}
           onClose={() => setEditing(null)} onSaved={() => { setMessage({ type: 'success', text: 'Donation updated.' }); onChanged() }} />
+      )}
+    </div>
+  )
+}
+
+// ─── Bulk Entry ─────────────────────────────────────────────────────────────
+// For transcribing a photographed paper sheet after a pickup day: one line per
+// donation, previewed and validated before anything is saved (all-or-nothing).
+function BulkEntry({ products, donors, onDone }) {
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState('')
+  const [bulkDate, setBulkDate] = useState(localToday())
+  const [saving, setSaving] = useState(false)
+  const [result, setResult] = useState(null)
+
+  const productLookup = useMemo(() => {
+    const m = {}
+    products.forEach(p => { m[p.name.toLowerCase()] = p.name })
+    return m
+  }, [products])
+  const donorLookup = useMemo(() => {
+    const m = {}
+    donors.forEach(d => { m[d.name.toLowerCase()] = d.name })
+    return m
+  }, [donors])
+
+  const parsed = useMemo(() => {
+    return text.split('\n').map(l => l.trim()).filter(Boolean).map((line, i) => {
+      const parts = line.split(',').map(p => p.trim())
+      if (parts.length < 3) return { line: i + 1, raw: line, error: 'Need: Donor, Product, Weight' }
+      const [donorRaw, productRaw, weightRaw, itemsRaw] = parts
+      const product = productLookup[productRaw.toLowerCase()]
+      if (!product) return { line: i + 1, raw: line, error: `Unknown product "${productRaw}"` }
+      const weight = parseFloat(weightRaw)
+      if (!(weight > 0)) return { line: i + 1, raw: line, error: `Bad weight "${weightRaw}"` }
+      const items = itemsRaw ? parseInt(itemsRaw) : null
+      const donor = donorLookup[donorRaw.toLowerCase()] || donorRaw
+      return { line: i + 1, donor, product, weight, items, newDonor: !donorLookup[donorRaw.toLowerCase()] }
+    })
+  }, [text, productLookup, donorLookup])
+
+  const errors = parsed.filter(p => p.error)
+  const valid = parsed.filter(p => !p.error)
+
+  const handleSubmit = async () => {
+    if (errors.length || valid.length === 0) return
+    setSaving(true)
+    setResult(null)
+    try {
+      const res = await api('/donations/bulk', {
+        method: 'POST',
+        body: JSON.stringify({
+          donations: valid.map(p => ({
+            donor_name: p.donor, product_name: p.product, weight: p.weight,
+            item_count: p.items, donation_date: bulkDate,
+          })),
+        }),
+      })
+      setResult({ type: 'success', text: `Saved all ${res.saved} donations for ${bulkDate}.` })
+      setText('')
+      onDone()
+    } catch (err) {
+      setResult({ type: 'error', text: `${err.message} (nothing was saved)` })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-xl shadow mt-6 p-6">
+      <button onClick={() => setOpen(!open)} className="text-sm font-semibold text-blue-600 hover:text-blue-800">
+        {open ? '▾' : '▸'} Bulk Entry — type in a paper sheet
+      </button>
+      {open && (
+        <div className="mt-4 space-y-3">
+          <p className="text-xs text-gray-500">
+            One donation per line: <code className="bg-gray-100 px-1 rounded">Donor, Product, Weight, Items</code> (items optional).
+            Nothing is saved until every line checks out.
+          </p>
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-semibold text-gray-600">Sheet date:</label>
+            <input type="date" value={bulkDate} onChange={e => setBulkDate(e.target.value)}
+              className="px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500" />
+          </div>
+          <textarea value={text} onChange={e => { setText(e.target.value); setResult(null) }} rows="6"
+            placeholder={"Cindy Gist, Tomatoes - Slicing, 4.5, 6\nBrooks Automation, Zucchini, 12"}
+            className="w-full px-3 py-2 border-2 rounded-lg outline-none focus:border-green-500 font-mono text-sm" />
+          {result && (
+            <div className={`p-3 rounded-lg text-sm ${result.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>{result.text}</div>
+          )}
+          {text.trim() && (
+            <div className="text-sm space-y-1">
+              {errors.map(e => (
+                <div key={e.line} className="text-red-600">Line {e.line}: {e.error} — <span className="font-mono text-xs">{e.raw}</span></div>
+              ))}
+              {valid.length > 0 && (
+                <div className="text-gray-600">
+                  ✓ {valid.length} line{valid.length > 1 ? 's' : ''} ready
+                  {valid.some(v => v.newDonor) && <span className="text-amber-600"> · new donors will be created: {[...new Set(valid.filter(v => v.newDonor).map(v => v.donor))].join(', ')}</span>}
+                </div>
+              )}
+            </div>
+          )}
+          <button onClick={handleSubmit} disabled={saving || errors.length > 0 || valid.length === 0}
+            className="px-5 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 font-semibold">
+            {saving ? 'Saving...' : `Save ${valid.length || ''} Donation${valid.length === 1 ? '' : 's'}`}
+          </button>
+        </div>
       )}
     </div>
   )
@@ -792,6 +932,8 @@ function AddDonationTab({ products, donors, onAdded }) {
           </ul>
         </div>
       )}
+
+      <BulkEntry products={products} donors={donors} onDone={() => { loadDayEntries(); onAdded() }} />
     </div>
   )
 }
@@ -1024,6 +1166,9 @@ function ManageProductsTab({ products, onUpdated, seasons }) {
         </div>
       )}
 
+      {/* Impact Settings */}
+      <ImpactSettings onSaved={() => setMessage({ type: 'success', text: 'Impact settings saved — dashboard numbers update immediately.' })} onError={err => setMessage({ type: 'error', text: err })} />
+
       {/* Initialize New Season */}
       <div className="bg-blue-50 border-2 border-blue-300 rounded-xl p-6">
         <h3 className="text-lg font-bold mb-2 text-blue-800">Start a New Season</h3>
@@ -1091,6 +1236,9 @@ function ManageProductsTab({ products, onUpdated, seasons }) {
                         <span className={`font-semibold ${p.has_season_price ? 'text-green-700' : 'text-gray-400 italic'}`}>
                           {formatMoney(p.effective_price)}
                           {!p.has_season_price && ' *'}
+                          {p.effective_date && !p.effective_date.endsWith('-01-01') && (
+                            <span className="block text-xs text-amber-600 font-normal">since {new Date(p.effective_date + 'T12:00:00').toLocaleDateString()}</span>
+                          )}
                         </span>
                       )}
                     </td>
@@ -1120,11 +1268,68 @@ function ManageProductsTab({ products, onUpdated, seasons }) {
             </tbody>
           </table>
         </div>
-        {seasonPrices.some(p => !p.has_season_price) && (
-          <div className="px-6 py-3 bg-gray-50 text-gray-500 text-xs border-t">
-            * Using default price — no season-specific price set for {priceYear}
-          </div>
-        )}
+        <div className="px-6 py-3 bg-gray-50 text-gray-500 text-xs border-t space-y-1">
+          {seasonPrices.some(p => !p.has_season_price) && (
+            <p>* Using default price — no season-specific price set for {priceYear}</p>
+          )}
+          <p>Changing a price mid-season applies <strong>from today forward</strong> — donations already recorded keep the price that was in effect on their date.</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Impact Settings ────────────────────────────────────────────────────────
+// The multipliers behind "Servings Provided" and "Meals Funded" — editable so a
+// grant-year change doesn't need a developer
+function ImpactSettings({ onSaved, onError }) {
+  const [settings, setSettings] = useState(null)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    api('/settings').then(s => setSettings({ servings_per_lb: String(s.servings_per_lb), dollars_per_meal: String(s.dollars_per_meal) })).catch(() => {})
+  }, [])
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      await api('/settings', {
+        method: 'PUT',
+        body: JSON.stringify({
+          servings_per_lb: parseFloat(settings.servings_per_lb),
+          dollars_per_meal: parseFloat(settings.dollars_per_meal),
+        }),
+      })
+      onSaved()
+    } catch (err) {
+      onError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!settings) return null
+  return (
+    <div className="bg-purple-50 border-2 border-purple-300 rounded-xl p-6">
+      <h3 className="text-lg font-bold mb-2 text-purple-800">Impact Settings</h3>
+      <p className="text-purple-600 text-sm mb-4">These drive the "Servings Provided" and "Meals Funded" numbers on the dashboard and reports.</p>
+      <div className="flex flex-wrap items-end gap-4">
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-1">Servings per pound</label>
+          <input type="number" step="0.1" min="0.1" inputMode="decimal" value={settings.servings_per_lb}
+            onChange={e => setSettings({ ...settings, servings_per_lb: e.target.value })}
+            className="w-32 px-3 py-2 border-2 rounded-lg outline-none focus:border-purple-500" />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-1">Dollars per meal</label>
+          <input type="number" step="0.25" min="0.25" inputMode="decimal" value={settings.dollars_per_meal}
+            onChange={e => setSettings({ ...settings, dollars_per_meal: e.target.value })}
+            className="w-32 px-3 py-2 border-2 rounded-lg outline-none focus:border-purple-500" />
+        </div>
+        <button onClick={handleSave} disabled={saving}
+          className="px-5 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-400 font-semibold">
+          {saving ? 'Saving...' : 'Save'}
+        </button>
       </div>
     </div>
   )
@@ -1290,6 +1495,40 @@ function DistributionsTab({ products, onChanged }) {
     }
   }
 
+  const [editingDist, setEditingDist] = useState(null)
+
+  const handleSaveDist = async () => {
+    const d = editingDist
+    try {
+      await api(`/distributions/${d.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ weight: parseFloat(d.weight), item_count: d.item_count ? parseInt(d.item_count) : null }),
+      })
+      setEditingDist(null)
+      setMessage({ type: 'success', text: 'Allocation updated.' })
+      loadDay()
+      onChanged()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+  }
+
+  const handleAllocateRest = (p) => {
+    if (p.remaining_weight <= 0) return
+    setForm(f => ({ ...f, product_name: p.product_name, weight: String(p.remaining_weight) }))
+  }
+
+  const recipientTotals = useMemo(() => {
+    const totals = {}
+    dayDists.forEach(d => {
+      const t = totals[d.recipient_name] || { weight: 0, value: 0 }
+      t.weight += d.weight
+      t.value += d.total_value
+      totals[d.recipient_name] = t
+    })
+    return Object.entries(totals)
+  }, [dayDists])
+
   const handleDeleteDist = async (d) => {
     if (!window.confirm(`Remove allocation of ${d.weight} lbs ${d.product_name} to ${d.recipient_name}?`)) return
     try {
@@ -1355,6 +1594,10 @@ function DistributionsTab({ products, onChanged }) {
                     <td className="px-4 py-2 text-right">{formatNum(p.allocated_weight)}</td>
                     <td className={`px-4 py-2 text-right font-semibold ${p.remaining_weight < 0 ? 'text-red-600' : p.remaining_weight === 0 ? 'text-gray-400' : 'text-green-700'}`}>
                       {formatNum(p.remaining_weight)}{p.remaining_weight < 0 && ' ⚠️'}
+                      {p.remaining_weight > 0 && (
+                        <button onClick={() => handleAllocateRest(p)} title="Fill the form with the remaining weight"
+                          className="ml-2 px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-semibold hover:bg-green-200">→ form</button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -1425,22 +1668,49 @@ function DistributionsTab({ products, onChanged }) {
                 </tr>
               </thead>
               <tbody>
-                {dayDists.map(d => (
-                  <tr key={d.id} className="border-b hover:bg-gray-50">
-                    <td className="px-4 py-2 font-semibold">{d.recipient_name}</td>
-                    <td className="px-4 py-2">{d.product_name}</td>
-                    <td className="px-4 py-2 text-right">{d.item_count ?? '—'}</td>
-                    <td className="px-4 py-2 text-right">{formatNum(d.weight)}</td>
-                    <td className="px-4 py-2 text-right text-green-700 font-semibold">{formatMoney(d.total_value)}</td>
-                    <td className="px-4 py-2 text-center">
-                      <button onClick={() => handleDeleteDist(d)}
-                        className="px-3 py-2 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Remove</button>
-                    </td>
-                  </tr>
-                ))}
+                {dayDists.map(d => {
+                  const isEditing = editingDist?.id === d.id
+                  return (
+                    <tr key={d.id} className="border-b hover:bg-gray-50">
+                      <td className="px-4 py-2 font-semibold">{d.recipient_name}</td>
+                      <td className="px-4 py-2">{d.product_name}</td>
+                      <td className="px-4 py-2 text-right">
+                        {isEditing ? <input type="number" step="1" min="0" value={editingDist.item_count ?? ''} onChange={e => setEditingDist({ ...editingDist, item_count: e.target.value })}
+                          className="w-16 px-2 py-1 border-2 border-amber-400 rounded text-right outline-none" /> : (d.item_count ?? '—')}
+                      </td>
+                      <td className="px-4 py-2 text-right">
+                        {isEditing ? <input type="number" step="0.1" min="0" inputMode="decimal" value={editingDist.weight} onChange={e => setEditingDist({ ...editingDist, weight: e.target.value })}
+                          className="w-20 px-2 py-1 border-2 border-amber-400 rounded text-right outline-none" autoFocus /> : formatNum(d.weight)}
+                      </td>
+                      <td className="px-4 py-2 text-right text-green-700 font-semibold">{formatMoney(d.total_value)}</td>
+                      <td className="px-4 py-2 text-center">
+                        {isEditing ? (
+                          <div className="flex gap-1 justify-center">
+                            <button onClick={handleSaveDist} className="px-3 py-2 bg-green-600 text-white rounded text-xs hover:bg-green-700 font-semibold">Save</button>
+                            <button onClick={() => setEditingDist(null)} className="px-3 py-2 bg-gray-300 text-gray-700 rounded text-xs hover:bg-gray-400">Cancel</button>
+                          </div>
+                        ) : (
+                          <div className="flex gap-1 justify-center">
+                            <button onClick={() => setEditingDist({ id: d.id, weight: String(d.weight), item_count: d.item_count })}
+                              className="px-3 py-2 bg-amber-100 text-amber-700 rounded text-xs hover:bg-amber-200 font-semibold">Edit</button>
+                            <button onClick={() => handleDeleteDist(d)}
+                              className="px-3 py-2 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Remove</button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
+          {recipientTotals.length > 0 && (
+            <div className="px-6 py-3 bg-blue-50 border-t flex flex-wrap gap-x-8 gap-y-1 text-sm">
+              {recipientTotals.map(([name, t]) => (
+                <span key={name}><span className="font-bold text-blue-800">{name}:</span> <span className="text-gray-700">{formatNum(t.weight)} lbs · {formatMoney(t.value)}</span></span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -1526,6 +1796,24 @@ function ReportsTab({ seasons, donors }) {
     : rt.daily
       ? `${rt.label} — ${new Date(selDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}`
       : `${rt.label} — ${selYear} Season`
+
+  const downloadCsvReport = () => {
+    const name = `GrowARow_${reportType}_${rt.donor ? selDonor.replace(/[^A-Za-z0-9]+/g, '_') + '_' + selYear : rt.daily ? selDate : selYear}.csv`
+    if (reportType === 'daily') {
+      downloadCsv(name, ['Donor', 'Product', 'Items', 'Weight (lbs)', 'Value'],
+        data.lines.map(l => [l.donor_name, l.product_name, l.items ?? '', l.weight, l.value]))
+    } else if (reportType === 'daily-summary' || reportType === 'ytd-produce') {
+      downloadCsv(name, ['Product', 'Items', 'Weight (lbs)', 'Value'],
+        data.rows.map(l => [l.product_name, l.items ?? '', l.weight, l.value]))
+    } else if (reportType === 'donor-history') {
+      downloadCsv(name, ['Date', 'Product', 'Items', 'Weight (lbs)', 'Value'],
+        data.lines.map(l => [l.date, l.product_name, l.items ?? '', l.weight, l.value]))
+    } else {
+      const groups = reportType === 'daily-donors' ? data.donors : data.groups
+      downloadCsv(name, [reportType === 'ytd-customers' ? 'Recipient' : 'Donor', 'Product', 'Items', 'Weight (lbs)', 'Value'],
+        groups.flatMap(g => g.lines.map(l => [g.donor_name || g.name, l.product_name, l.items ?? '', l.weight, l.value])))
+    }
+  }
 
   const downloadPdf = async () => {
     const { default: jsPDF } = await import('jspdf')
@@ -1655,10 +1943,20 @@ function ReportsTab({ seasons, donors }) {
             </>
           ) : null}
           {hasData && (
-            <button onClick={downloadPdf}
-              className="ml-auto px-5 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-semibold text-sm">
-              ⬇ Download PDF
-            </button>
+            <div className="ml-auto flex gap-2">
+              <button onClick={downloadCsvReport}
+                className="px-5 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-semibold text-sm">
+                ⬇ CSV
+              </button>
+              <button onClick={downloadPdf}
+                className="px-5 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-semibold text-sm">
+                ⬇ PDF
+              </button>
+              <button onClick={() => window.print()}
+                className="px-5 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 font-semibold text-sm">
+                🖨 Print
+              </button>
+            </div>
           )}
         </div>
       </div>

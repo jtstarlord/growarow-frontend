@@ -15,3 +15,11 @@ body {
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
 }
+
+/* Print: only the report content — no chrome, no controls */
+@media print {
+  header, nav, footer, button, select, input, textarea { display: none !important; }
+  body { background: white !important; }
+  main { max-width: none !important; }
+  .shadow, .rounded-xl { box-shadow: none !important; }
+}
