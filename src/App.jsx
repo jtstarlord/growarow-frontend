@@ -2283,11 +2283,11 @@ function AboutTab() {
 function PinGate({ children, unlocked, onUnlock }) {
   const [pin, setPin] = useState('')
   const [error, setError] = useState(false)
-
-  if (unlocked) return children
-
   const [checking, setChecking] = useState(false)
   const [errorText, setErrorText] = useState(null)
+
+  // hooks above, early return below — never between
+  if (unlocked) return children
 
   const handleSubmit = async (e) => {
     e.preventDefault()
