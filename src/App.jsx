@@ -1,14 +1,21 @@
-import { useState, useMemo, useEffect, useCallback } from 'react'
+import React, { useState, useMemo, useEffect, useCallback } from 'react'
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-const APP_PIN = import.meta.env.VITE_APP_PIN || '2025'
+// Local calendar date — never toISOString(), which is UTC and rolls to tomorrow
+// after 8pm Eastern (exactly when evening pickups get logged)
+function localToday() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 const COLORS = ['#16a34a','#2563eb','#d97706','#dc2626','#7c3aed','#db2777','#0d9488','#ea580c','#4f46e5','#059669']
 
-// The PIN doubles as the API key: the backend rejects any write without it,
-// so unlocking the UI alone is not enough to modify data.
-let apiPin = sessionStorage.getItem('gar_pin') || ''
-function setApiPin(pin) { apiPin = pin; sessionStorage.setItem('gar_pin', pin) }
+// The PIN doubles as the API key: the backend rejects any write without it, so
+// unlocking the UI alone is not enough to modify data. The PIN is verified
+// server-side (POST /auth/verify) and never baked into this bundle.
+let apiPin = localStorage.getItem('gar_pin') || ''
+function setApiPin(pin) { apiPin = pin; localStorage.setItem('gar_pin', pin) }
+function clearApiPin() { apiPin = ''; localStorage.removeItem('gar_pin') }
 
 async function api(path, options = {}) {
   const res = await fetch(`${API_URL}${path}`, {
@@ -16,10 +23,27 @@ async function api(path, options = {}) {
     ...options,
   })
   if (!res.ok) {
+    if (res.status === 401 && options.method && options.method !== 'GET') {
+      // Stored PIN no longer valid (rotated server-side) — relock the UI
+      clearApiPin()
+      window.dispatchEvent(new Event('gar-pin-invalid'))
+    }
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail || 'Request failed')
+    const detail = err.detail
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail) || 'Request failed')
   }
   return res.json()
+}
+
+async function verifyPin(pin) {
+  const res = await fetch(`${API_URL}/auth/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pin }),
+  })
+  if (res.ok) return { ok: true }
+  const err = await res.json().catch(() => ({ detail: 'Verification failed' }))
+  return { ok: false, error: err.detail }
 }
 
 function formatMoney(n) { return '$' + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
@@ -348,9 +372,10 @@ function TrendsTab({ donations }) {
   const weeklyData = useMemo(() => {
     const weeks = {}
     donations.forEach(d => {
-      const dt = new Date(d.donation_date)
+      // parse at noon so the calendar date survives the local-timezone shift
+      const dt = new Date(d.donation_date + 'T12:00:00')
       const sun = new Date(dt); sun.setDate(dt.getDate() - dt.getDay())
-      const key = sun.toISOString().slice(0, 10)
+      const key = `${sun.getFullYear()}-${String(sun.getMonth() + 1).padStart(2, '0')}-${String(sun.getDate()).padStart(2, '0')}`
       if (!weeks[key]) weeks[key] = { week: key, donations: 0, weight: 0, value: 0 }
       weeks[key].donations++
       weeks[key].weight += d.weight
@@ -540,7 +565,7 @@ function DonationsTab({ donations, products, donors, onChanged }) {
 
 // ─── Add Donation Tab ───────────────────────────────────────────────────────
 function AddDonationTab({ products, donors, onAdded }) {
-  const [form, setForm] = useState({ donor_name: '', product_name: '', weight: '', item_count: '', donation_date: new Date().toISOString().slice(0, 10), notes: '' })
+  const [form, setForm] = useState({ donor_name: '', product_name: '', weight: '', item_count: '', donation_date: localToday(), notes: '' })
   const [newDonorMode, setNewDonorMode] = useState(false)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState(null)
@@ -568,6 +593,12 @@ function AddDonationTab({ products, donors, onAdded }) {
       setMessage({ type: 'error', text: 'Please fill in all required fields.' })
       return
     }
+    const w = parseFloat(form.weight)
+    if (!(w > 0)) {
+      setMessage({ type: 'error', text: 'Weight must be greater than zero.' })
+      return
+    }
+    if (w > 100 && !window.confirm(`That's ${w} lbs of ${form.product_name} — unusually large. Save anyway?`)) return
     setSaving(true)
     setMessage(null)
     try {
@@ -1022,8 +1053,7 @@ function ManageProductsTab({ products, onUpdated, seasons }) {
 
 // ─── Year-Over-Year Tab ─────────────────────────────────────────────────────
 function YearOverYearTab({ seasons, yoyData }) {
-  if (!seasons || seasons.length === 0) return <p className="p-6 text-gray-500">No season data available yet.</p>
-
+  // hooks must run unconditionally — the empty-state return comes after them
   const chartData = useMemo(() => {
     if (!yoyData) return []
     const allWeeks = new Set()
@@ -1040,6 +1070,8 @@ function YearOverYearTab({ seasons, yoyData }) {
   }, [yoyData])
 
   const years = Object.keys(yoyData || {}).sort()
+
+  if (!seasons || seasons.length === 0) return <p className="p-6 text-gray-500">No season data available yet.</p>
 
   return (
     <div className="p-6 space-y-6">
@@ -1126,7 +1158,7 @@ function YearOverYearTab({ seasons, yoyData }) {
 // End-of-day allocation: all produce received on a pickup day is pooled, then
 // divided among the receiving organizations. Not tied to individual donors.
 function DistributionsTab({ products, onChanged }) {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localToday()
   const [selDate, setSelDate] = useState(today)
   const [dayStatus, setDayStatus] = useState(null)
   const [dayDists, setDayDists] = useState([])
@@ -1379,7 +1411,7 @@ const REPORT_TYPES = [
 function reportRows3(l) { return [l.product_name, l.items ?? '—', formatNum(l.weight), formatMoney(l.value)] }
 
 function ReportsTab({ seasons, donors }) {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localToday()
   const currentYear = new Date().getFullYear()
   const [reportType, setReportType] = useState('daily-summary')
   const [selDate, setSelDate] = useState(today)
@@ -1877,14 +1909,23 @@ function PinGate({ children, unlocked, onUnlock }) {
 
   if (unlocked) return children
 
-  const handleSubmit = (e) => {
+  const [checking, setChecking] = useState(false)
+  const [errorText, setErrorText] = useState(null)
+
+  const handleSubmit = async (e) => {
     e.preventDefault()
-    if (pin === APP_PIN) {
+    if (!pin || checking) return
+    setChecking(true)
+    setErrorText(null)
+    const result = await verifyPin(pin)
+    setChecking(false)
+    if (result.ok) {
       setApiPin(pin)
       onUnlock()
       setError(false)
     } else {
       setError(true)
+      setErrorText(typeof result.error === 'string' ? result.error : 'Incorrect PIN. Please try again.')
       setPin('')
     }
   }
@@ -1897,7 +1938,7 @@ function PinGate({ children, unlocked, onUnlock }) {
         <p className="text-gray-500 text-sm mb-6">Enter the volunteer PIN to add or edit data.</p>
         {error && (
           <div className="mb-4 p-3 rounded-lg bg-red-50 text-red-700 text-sm border border-red-200">
-            Incorrect PIN. Please try again.
+            {errorText || 'Incorrect PIN. Please try again.'}
           </div>
         )}
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -1909,15 +1950,38 @@ function PinGate({ children, unlocked, onUnlock }) {
             className="w-full px-4 py-3 border-2 rounded-lg text-center text-2xl tracking-widest outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
             autoFocus
           />
-          <button type="submit"
-            className="w-full py-3 rounded-lg font-bold text-white bg-green-600 hover:bg-green-700 transition-colors">
-            Unlock
+          <button type="submit" disabled={checking}
+            className="w-full py-3 rounded-lg font-bold text-white bg-green-600 hover:bg-green-700 disabled:bg-gray-400 transition-colors">
+            {checking ? 'Checking...' : 'Unlock'}
           </button>
         </form>
         <p className="text-gray-400 text-xs mt-4">Contact your Grow-A-Row coordinator for the PIN.</p>
       </div>
     </div>
   )
+}
+
+// ─── Error Boundary ─────────────────────────────────────────────────────────
+// One tab crashing must never white-screen the whole dashboard
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null } }
+  static getDerivedStateFromError(error) { return { error } }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="p-6 max-w-lg mx-auto mt-8 text-center">
+          <div className="bg-red-50 border-2 border-red-200 rounded-xl p-8">
+            <div className="text-4xl mb-3">😵</div>
+            <h2 className="text-xl font-bold text-red-800 mb-2">This tab hit an error</h2>
+            <p className="text-red-600 text-sm mb-4">The rest of the dashboard still works — switch tabs or reload.</p>
+            <button onClick={() => window.location.reload()}
+              className="px-5 py-2 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700">Reload</button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
 }
 
 // ─── Main App ───────────────────────────────────────────────────────────────
@@ -1934,7 +1998,14 @@ export default function App() {
   const [selectedYear, setSelectedYear] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [pinUnlocked, setPinUnlocked] = useState(() => apiPin === APP_PIN)
+  // A stored PIN unlocks optimistically; the server re-checks on every write and
+  // a 401 fires gar-pin-invalid to relock (e.g. after John rotates the PIN)
+  const [pinUnlocked, setPinUnlocked] = useState(() => Boolean(apiPin))
+  useEffect(() => {
+    const relock = () => setPinUnlocked(false)
+    window.addEventListener('gar-pin-invalid', relock)
+    return () => window.removeEventListener('gar-pin-invalid', relock)
+  }, [])
 
   const [filterDonor, setFilterDonor] = useState('')
   const [filterProduct, setFilterProduct] = useState('')
@@ -2095,6 +2166,7 @@ export default function App() {
       {/* Content */}
       {!error && (metrics || !loading) && (
         <main className="max-w-7xl mx-auto">
+          <ErrorBoundary key={tab}>
           {tab === 'overview' && <OverviewTab metrics={metrics} donorStats={donorStats} productStats={productStats} />}
           {tab === 'donors' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><DonorsTab donorStats={donorStats} onChanged={loadData} /></PinGate>}
           {tab === 'products' && <ProductsTab productStats={productStats} />}
@@ -2106,6 +2178,7 @@ export default function App() {
           {tab === 'reports' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><ReportsTab seasons={seasons} donors={donors} /></PinGate>}
           {tab === 'manage' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><ManageProductsTab products={products} onUpdated={loadData} seasons={seasons} /></PinGate>}
           {tab === 'about' && <AboutTab />}
+          </ErrorBoundary>
         </main>
       )}
 
