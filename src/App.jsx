@@ -315,19 +315,19 @@ function DonorsTab({ donorStats, onChanged }) {
                       <td className="px-4 py-2 text-center">
                         {isEditing ? (
                           <div className="flex gap-1 justify-center">
-                            <button onClick={handleSaveEdit} className="px-3 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700">Save</button>
-                            <button onClick={() => setEditingDonor(null)} className="px-3 py-1 bg-gray-300 text-gray-700 rounded text-xs hover:bg-gray-400">Cancel</button>
+                            <button onClick={handleSaveEdit} className="px-3 py-2 bg-green-600 text-white rounded text-xs hover:bg-green-700">Save</button>
+                            <button onClick={() => setEditingDonor(null)} className="px-3 py-2 bg-gray-300 text-gray-700 rounded text-xs hover:bg-gray-400">Cancel</button>
                           </div>
                         ) : (
                           <div className="flex gap-1 justify-center">
                             <button onClick={() => setEditingDonor({ ...d })}
-                              className="px-3 py-1 bg-amber-100 text-amber-700 rounded text-xs hover:bg-amber-200 font-semibold">Edit</button>
+                              className="px-3 py-2 bg-amber-100 text-amber-700 rounded text-xs hover:bg-amber-200 font-semibold">Edit</button>
                             {d.active ? (
                               <button onClick={() => act(() => api(`/donors/${d.id}/deactivate`, { method: 'POST' }), `Deactivated "${d.name}" — past donations are kept`)}
-                                className="px-3 py-1 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Deactivate</button>
+                                className="px-3 py-2 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Deactivate</button>
                             ) : (
                               <button onClick={() => act(() => api(`/donors/${d.id}/reactivate`, { method: 'POST' }), `Reactivated "${d.name}"`)}
-                                className="px-3 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200 font-semibold">Reactivate</button>
+                                className="px-3 py-2 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200 font-semibold">Reactivate</button>
                             )}
                           </div>
                         )}
@@ -540,9 +540,9 @@ function DonationsTab({ donations, products, donors, onChanged }) {
     { key: 'id', label: 'Actions', right: true, fmt: (_, row) => (
       <div className="flex gap-1 justify-end">
         <button onClick={() => setEditing(row)}
-          className="px-2.5 py-1 bg-amber-100 text-amber-700 rounded text-xs hover:bg-amber-200 font-semibold">Edit</button>
+          className="px-3 py-2 bg-amber-100 text-amber-700 rounded text-xs hover:bg-amber-200 font-semibold">Edit</button>
         <button onClick={() => handleDelete(row)}
-          className="px-2.5 py-1 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Delete</button>
+          className="px-3 py-2 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Delete</button>
       </div>
     ) },
   ]
@@ -564,12 +564,52 @@ function DonationsTab({ donations, products, donors, onChanged }) {
 }
 
 // ─── Add Donation Tab ───────────────────────────────────────────────────────
+const DRAFT_KEY = 'gar_entry_draft'
+
 function AddDonationTab({ products, donors, onAdded }) {
-  const [form, setForm] = useState({ donor_name: '', product_name: '', weight: '', item_count: '', donation_date: localToday(), notes: '' })
+  const [form, setForm] = useState(() => {
+    // Restore an unsaved draft (survives a dropped signal, closed tab, or crash)
+    try {
+      const draft = JSON.parse(localStorage.getItem(DRAFT_KEY))
+      if (draft && (draft.donor_name || draft.product_name || draft.weight)) return { ...draft, donation_date: draft.donation_date || localToday() }
+    } catch { /* fall through */ }
+    return { donor_name: '', product_name: '', weight: '', item_count: '', donation_date: localToday(), notes: '' }
+  })
   const [newDonorMode, setNewDonorMode] = useState(false)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState(null)
   const [priceMap, setPriceMap] = useState({})
+  const [dayEntries, setDayEntries] = useState([])
+
+  // Draft persistence: anything typed survives until successfully saved
+  useEffect(() => {
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify(form)) } catch { /* storage full */ }
+  }, [form])
+
+  // "Entered so far" for the form's date — confirmation + undo without leaving the screen
+  const loadDayEntries = useCallback(() => {
+    if (!form.donation_date) return
+    api(`/donations?start_date=${form.donation_date}&end_date=${form.donation_date}`)
+      .then(d => setDayEntries(d.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))))
+      .catch(() => {})
+  }, [form.donation_date])
+  useEffect(() => { loadDayEntries() }, [loadDayEntries])
+
+  const handleUndo = async (entry) => {
+    if (!window.confirm(`Remove ${entry.weight} lbs of ${entry.product_name} from ${entry.donor_name}?`)) return
+    try {
+      await api(`/donations/${entry.id}`, { method: 'DELETE' })
+      setMessage({ type: 'success', text: 'Entry removed.' })
+      loadDayEntries()
+      onAdded()
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message })
+    }
+  }
+
+  const isStaleDate = form.donation_date && form.donation_date !== localToday()
+  const dayTotal = dayEntries.reduce((s, d) => s + d.total_value, 0)
+  const dayWeight = dayEntries.reduce((s, d) => s + d.weight, 0)
 
   // Prices are effective-dated: load the price of every product as of the donation date
   useEffect(() => {
@@ -599,6 +639,9 @@ function AddDonationTab({ products, donors, onAdded }) {
       return
     }
     if (w > 100 && !window.confirm(`That's ${w} lbs of ${form.product_name} — unusually large. Save anyway?`)) return
+    // Duplicate guard: same donor + product + weight already saved for this date
+    const dup = dayEntries.find(d => d.donor_name === form.donor_name.trim() && d.product_name === form.product_name && Math.abs(d.weight - w) < 0.001)
+    if (dup && !window.confirm(`${dup.donor_name} already has ${dup.weight} lbs of ${dup.product_name} recorded for this date. Save a second entry anyway?`)) return
     setSaving(true)
     setMessage(null)
     try {
@@ -613,10 +656,12 @@ function AddDonationTab({ products, donors, onAdded }) {
       })
       setMessage({ type: 'success', text: `Donation recorded! ${form.weight} lbs of ${form.product_name} from ${form.donor_name} (${formatMoney(calcValue)})` })
       setForm({ donor_name: '', product_name: '', weight: '', item_count: '', donation_date: form.donation_date, notes: '' })
+      try { localStorage.removeItem(DRAFT_KEY) } catch { /* noop */ }
       setNewDonorMode(false)
+      loadDayEntries()
       onAdded()
     } catch (err) {
-      setMessage({ type: 'error', text: err.message })
+      setMessage({ type: 'error', text: `${err.message} — your entry is still in the form; check signal and tap Record again.` })
     } finally {
       setSaving(false)
     }
@@ -629,6 +674,13 @@ function AddDonationTab({ products, donors, onAdded }) {
         {message && (
           <div className={`mb-4 p-4 rounded-lg text-sm ${message.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
             {message.text}
+          </div>
+        )}
+        {isStaleDate && (
+          <div className="mb-4 p-3 rounded-lg bg-amber-50 text-amber-800 border-2 border-amber-300 text-sm font-semibold flex items-center justify-between gap-2">
+            <span>⚠️ Recording for {new Date(form.donation_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })} — not today</span>
+            <button type="button" onClick={() => setForm({ ...form, donation_date: localToday() })}
+              className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-bold hover:bg-amber-700 whitespace-nowrap">Use Today</button>
           </div>
         )}
         <form onSubmit={handleSubmit} className="space-y-5">
@@ -672,7 +724,7 @@ function AddDonationTab({ products, donors, onAdded }) {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">Weight (lbs) *</label>
-              <input type="number" step="0.1" min="0" value={form.weight}
+              <input type="number" step="0.1" min="0" inputMode="decimal" value={form.weight}
                 onChange={e => setForm({ ...form, weight: e.target.value })}
                 className="w-full px-4 py-3 border-2 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
                 placeholder="0.0" />
@@ -713,6 +765,33 @@ function AddDonationTab({ products, donors, onAdded }) {
           </button>
         </form>
       </div>
+
+      {/* Entered so far — confirmation and undo without leaving the screen */}
+      {dayEntries.length > 0 && (
+        <div className="bg-white rounded-xl shadow mt-6 overflow-hidden">
+          <div className="bg-green-700 text-white px-6 py-3 flex items-center justify-between">
+            <h3 className="font-bold">
+              {isStaleDate ? `Entered for ${new Date(form.donation_date + 'T12:00:00').toLocaleDateString()}` : 'Entered today'} ({dayEntries.length})
+            </h3>
+            <span className="text-green-100 text-sm font-semibold">{formatNum(dayWeight)} lbs · {formatMoney(dayTotal)}</span>
+          </div>
+          <ul className="divide-y">
+            {dayEntries.map(d => (
+              <li key={d.id} className="px-4 py-3 flex items-center justify-between gap-2 text-sm">
+                <div className="min-w-0">
+                  <span className="font-semibold">{d.donor_name}</span>
+                  <span className="text-gray-500"> — {d.product_name}, {formatNum(d.weight)} lbs{d.item_count ? ` (${d.item_count} items)` : ''}</span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-green-700 font-semibold">{formatMoney(d.total_value)}</span>
+                  <button onClick={() => handleUndo(d)}
+                    className="px-3 py-2 bg-red-100 text-red-700 rounded-lg text-xs font-semibold hover:bg-red-200 min-h-[40px]">Undo</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }
@@ -916,19 +995,19 @@ function ManageProductsTab({ products, onUpdated, seasons }) {
                       <td className="px-4 py-2 text-center">
                         {isEditing ? (
                           <div className="flex gap-1 justify-center">
-                            <button onClick={handleSaveProductEdit} className="px-3 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700">Save</button>
-                            <button onClick={() => setEditingProduct(null)} className="px-3 py-1 bg-gray-300 text-gray-700 rounded text-xs hover:bg-gray-400">Cancel</button>
+                            <button onClick={handleSaveProductEdit} className="px-3 py-2 bg-green-600 text-white rounded text-xs hover:bg-green-700">Save</button>
+                            <button onClick={() => setEditingProduct(null)} className="px-3 py-2 bg-gray-300 text-gray-700 rounded text-xs hover:bg-gray-400">Cancel</button>
                           </div>
                         ) : (
                           <div className="flex gap-1 justify-center">
                             <button onClick={() => setEditingProduct({ ...p })}
-                              className="px-3 py-1 bg-amber-100 text-amber-700 rounded text-xs hover:bg-amber-200 font-semibold">Rename</button>
+                              className="px-3 py-2 bg-amber-100 text-amber-700 rounded text-xs hover:bg-amber-200 font-semibold">Rename</button>
                             {p.active !== false ? (
                               <button onClick={() => productAct(() => api(`/products/${p.id}/deactivate`, { method: 'POST' }), `Retired "${p.name}" — history is kept, hidden from entry forms`)}
-                                className="px-3 py-1 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Retire</button>
+                                className="px-3 py-2 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Retire</button>
                             ) : (
                               <button onClick={() => productAct(() => api(`/products/${p.id}/reactivate`, { method: 'POST' }), `Restored "${p.name}"`)}
-                                className="px-3 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200 font-semibold">Restore</button>
+                                className="px-3 py-2 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200 font-semibold">Restore</button>
                             )}
                           </div>
                         )}
@@ -1026,13 +1105,13 @@ function ManageProductsTab({ products, onUpdated, seasons }) {
                       {isEditing ? (
                         <div className="flex gap-1 justify-center">
                           <button onClick={() => handleSavePrice(p.product_name)}
-                            className="px-3 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700">Save</button>
+                            className="px-3 py-2 bg-green-600 text-white rounded text-xs hover:bg-green-700">Save</button>
                           <button onClick={() => setEditingPrices(prev => { const n = { ...prev }; delete n[p.product_name]; return n })}
-                            className="px-3 py-1 bg-gray-300 text-gray-700 rounded text-xs hover:bg-gray-400">Cancel</button>
+                            className="px-3 py-2 bg-gray-300 text-gray-700 rounded text-xs hover:bg-gray-400">Cancel</button>
                         </div>
                       ) : (
                         <button onClick={() => handlePriceEdit(p.product_name, p.effective_price.toString())}
-                          className="px-3 py-1 bg-amber-100 text-amber-700 rounded text-xs hover:bg-amber-200 font-semibold">Edit</button>
+                          className="px-3 py-2 bg-amber-100 text-amber-700 rounded text-xs hover:bg-amber-200 font-semibold">Edit</button>
                       )}
                     </td>
                   </tr>
@@ -1355,7 +1434,7 @@ function DistributionsTab({ products, onChanged }) {
                     <td className="px-4 py-2 text-right text-green-700 font-semibold">{formatMoney(d.total_value)}</td>
                     <td className="px-4 py-2 text-center">
                       <button onClick={() => handleDeleteDist(d)}
-                        className="px-2.5 py-1 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Remove</button>
+                        className="px-3 py-2 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Remove</button>
                     </td>
                   </tr>
                 ))}
@@ -1383,10 +1462,10 @@ function DistributionsTab({ products, onChanged }) {
                 <span className="font-semibold text-sm">{r.name}</span>
                 {r.active ? (
                   <button onClick={async () => { await api(`/recipients/${r.id}/deactivate`, { method: 'POST' }).catch(err => setMessage({ type: 'error', text: err.message })); loadRecipients() }}
-                    className="px-3 py-1 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Deactivate</button>
+                    className="px-3 py-2 bg-red-100 text-red-700 rounded text-xs hover:bg-red-200 font-semibold">Deactivate</button>
                 ) : (
                   <button onClick={async () => { await api('/recipients', { method: 'POST', body: JSON.stringify({ name: r.name }) }).catch(err => setMessage({ type: 'error', text: err.message })); loadRecipients() }}
-                    className="px-3 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200 font-semibold">Reactivate</button>
+                    className="px-3 py-2 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200 font-semibold">Reactivate</button>
                 )}
               </div>
             ))}
@@ -1986,7 +2065,8 @@ class ErrorBoundary extends React.Component {
 
 // ─── Main App ───────────────────────────────────────────────────────────────
 export default function App() {
-  const [tab, setTab] = useState('overview')
+  // Volunteers on phones land straight on the entry form; analysis tabs are a tap away
+  const [tab, setTab] = useState(() => (window.innerWidth < 768 && Boolean(apiPin)) ? 'add' : 'overview')
   const [metrics, setMetrics] = useState(null)
   const [donorStats, setDonorStats] = useState([])
   const [productStats, setProductStats] = useState([])
@@ -2012,6 +2092,14 @@ export default function App() {
   const [filterFrom, setFilterFrom] = useState('')
   const [filterTo, setFilterTo] = useState('')
 
+  // Debounce the text filters — each keystroke used to fire six API calls
+  const [debouncedDonor, setDebouncedDonor] = useState('')
+  const [debouncedProduct, setDebouncedProduct] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => { setDebouncedDonor(filterDonor); setDebouncedProduct(filterProduct) }, 400)
+    return () => clearTimeout(t)
+  }, [filterDonor, filterProduct])
+
   useEffect(() => {
     api('/seasons').then(s => {
       setSeasons(s)
@@ -2024,8 +2112,8 @@ export default function App() {
     try {
       setLoading(true)
       const params = new URLSearchParams()
-      if (filterDonor) params.set('donor_name', filterDonor)
-      if (filterProduct) params.set('product_name', filterProduct)
+      if (debouncedDonor) params.set('donor_name', debouncedDonor)
+      if (debouncedProduct) params.set('product_name', debouncedProduct)
 
       if (!filterFrom && !filterTo && selectedYear) {
         params.set('start_date', `${selectedYear}-01-01`)
@@ -2057,7 +2145,7 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }, [filterDonor, filterProduct, filterFrom, filterTo, selectedYear])
+  }, [debouncedDonor, debouncedProduct, filterFrom, filterTo, selectedYear])
 
   useEffect(() => { if (selectedYear !== null || selectedYear === null) loadData() }, [loadData])
 
@@ -2114,7 +2202,8 @@ export default function App() {
         </div>
       </nav>
 
-      {/* Season Selector + Filters */}
+      {/* Season Selector + Filters — only on analysis tabs; entry screens keep the full viewport */}
+      {['overview', 'donors', 'products', 'trends', 'yoy', 'donations'].includes(tab) && (
       <div className="bg-white border-b">
         <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap gap-3 items-center">
           <span className="text-sm font-semibold text-gray-500">Season:</span>
@@ -2143,6 +2232,7 @@ export default function App() {
           )}
         </div>
       </div>
+      )}
 
       {/* Error */}
       {error && (
