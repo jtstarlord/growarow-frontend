@@ -2085,12 +2085,12 @@ function ReportsTab({ seasons, donors }) {
 // ─── About This App Tab ──────────────────────────────────────────────────
 function AboutTab() {
   const stats = {
-    totalLines: 2241,
-    files: 11,
+    totalLines: 4200,
+    files: 12,
     languages: [
-      { name: 'Python', lines: 881, color: '#3572A5', usage: 'Backend API, data import scripts' },
-      { name: 'JavaScript (JSX)', lines: 1178, color: '#f7df1e', usage: 'Frontend UI, interactive dashboard' },
-      { name: 'SQL', lines: 109, color: '#e38c00', usage: 'Database schema, indexes, seed data' },
+      { name: 'Python', lines: 1650, color: '#3572A5', usage: 'Backend API, tests, migrations' },
+      { name: 'JavaScript (JSX)', lines: 2450, color: '#f7df1e', usage: 'Frontend UI, interactive dashboard' },
+      
       { name: 'HTML', lines: 14, color: '#e34c26', usage: 'Entry point, meta tags' },
       { name: 'CSS', lines: 17, color: '#563d7c', usage: 'Base reset styles' },
       { name: 'JSON', lines: 42, color: '#292929', usage: 'Package config, deployment config' },
@@ -2112,7 +2112,7 @@ function AboutTab() {
     ],
     ai: {
       agent: 'Claude (Anthropic)',
-      model: 'Claude Opus 4',
+      model: 'Claude Fable 5',
       role: 'Full-stack AI development agent',
       description: 'This entire application — backend, frontend, database schema, deployment configuration, and documentation — was designed and written by Claude, Anthropic\'s AI assistant, through an interactive conversation with a human collaborator.',
       estimatedTokens: '~200,000+',
@@ -2152,7 +2152,7 @@ function AboutTab() {
             <div className="text-gray-500 text-sm mt-1">Languages</div>
           </div>
           <div className="bg-gray-50 rounded-lg p-4 text-center">
-            <div className="text-3xl font-black text-green-600">20+</div>
+            <div className="text-3xl font-black text-green-600">55+</div>
             <div className="text-gray-500 text-sm mt-1">API Endpoints</div>
           </div>
         </div>
@@ -2445,7 +2445,7 @@ export default function App() {
     }
   }, [debouncedDonor, debouncedProduct, filterFrom, filterTo, selectedYear])
 
-  useEffect(() => { if (selectedYear !== null || selectedYear === null) loadData() }, [loadData])
+  useEffect(() => { loadData() }, [loadData])
 
   const refreshSeasons = () => {
     api('/seasons').then(setSeasons).catch(() => {})
