@@ -2083,6 +2083,47 @@ function ReportsTab({ seasons, donors }) {
 }
 
 // ─── About This App Tab ──────────────────────────────────────────────────
+// ─── Board Reports Archive ──────────────────────────────────────────────────
+// Public archive of published Select Board reports. Each report is a static
+// page under /reports/<slug>/, listed in /reports/reports.json.
+function ReportArchiveTab() {
+  const [reports, setReports] = useState(null)
+
+  useEffect(() => {
+    fetch('/reports/reports.json')
+      .then(r => r.json())
+      .then(d => setReports(d.reports || []))
+      .catch(() => setReports([]))
+  }, [])
+
+  if (reports === null) return <p className="p-6 text-gray-500">Loading reports...</p>
+
+  return (
+    <div className="p-6 max-w-3xl mx-auto space-y-4">
+      <div className="text-center mb-6">
+        <h2 className="text-2xl font-bold text-green-700">Board Reports</h2>
+        <p className="text-gray-500 text-sm mt-1">Published reports to the Chelmsford Select Board</p>
+      </div>
+      {reports.length === 0 && <p className="text-gray-400 italic text-center">No reports published yet.</p>}
+      {reports.map(r => (
+        <a key={r.slug} href={`/reports/${r.slug}/`}
+          className="block bg-white rounded-xl shadow p-6 border-l-4 border-green-600 hover:shadow-md hover:bg-green-50 transition-all">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <div className="font-bold text-lg text-gray-800">{r.title}</div>
+              <div className="text-sm text-gray-500 mt-0.5">{r.period}</div>
+              {r.summary && <div className="text-sm text-gray-600 mt-2">{r.summary}</div>}
+            </div>
+            <div className="text-xs text-gray-400 whitespace-nowrap">
+              {new Date(r.published + 'T12:00:00').toLocaleDateString('en-US', { month: 'long' , day: 'numeric', year: 'numeric' })}
+            </div>
+          </div>
+        </a>
+      ))}
+    </div>
+  )
+}
+
 function AboutTab() {
   const stats = {
     totalLines: 4200,
@@ -2463,6 +2504,7 @@ export default function App() {
     { id: 'distributions', label: 'Distributions', icon: '🚚' },
     { id: 'reports', label: 'Reports', icon: '📄' },
     { id: 'manage', label: 'Manage Products', icon: '⚙️' },
+    { id: 'archive', label: 'Board Reports', icon: '📰' },
     { id: 'about', label: 'About', icon: 'ℹ️' },
   ]
 
@@ -2564,6 +2606,7 @@ export default function App() {
           {tab === 'add' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><AddDonationTab products={products} donors={donors} onAdded={() => { loadData(); refreshSeasons() }} /></PinGate>}
           {tab === 'distributions' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><DistributionsTab products={products} onChanged={loadData} /></PinGate>}
           {tab === 'reports' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><ReportsTab seasons={seasons} donors={donors} /></PinGate>}
+          {tab === 'archive' && <ReportArchiveTab />}
           {tab === 'manage' && <PinGate unlocked={pinUnlocked} onUnlock={() => setPinUnlocked(true)}><ManageProductsTab products={products} onUpdated={loadData} seasons={seasons} /></PinGate>}
           {tab === 'about' && <AboutTab />}
           </ErrorBoundary>
@@ -2573,11 +2616,6 @@ export default function App() {
       {/* Footer */}
       <footer className="bg-gray-800 text-gray-400 text-center text-sm py-6 mt-12">
         <p>Grow-A-Row Impact Dashboard &middot; Fighting Food Insecurity One Tomato at a Time</p>
-        <p className="mt-1">
-          <a href="/reports/2026/" className="text-green-400 hover:text-green-300 font-semibold underline">
-            2026 Report to the Chelmsford Select Board
-          </a>
-        </p>
         {metrics?.date_range_start && <p className="mt-1 text-gray-500">Data: {new Date(metrics.date_range_start + 'T12:00:00').toLocaleDateString()} &ndash; {new Date(metrics.date_range_end + 'T12:00:00').toLocaleDateString()}</p>}
       </footer>
     </div>
