@@ -2530,11 +2530,12 @@ export default function App() {
 
       {/* Tabs */}
       <nav className="bg-white shadow border-b">
-        <div className="max-w-7xl mx-auto px-4 flex overflow-x-auto">
+        {/* Wrapping nav: every tab visible at every width — nothing hidden behind a scroll */}
+        <div className="max-w-7xl mx-auto px-4 py-1.5 flex flex-wrap gap-x-1 gap-y-1 justify-center sm:justify-start">
           {tabs.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className={`px-4 py-3 text-sm font-medium whitespace-nowrap border-b-3 transition-colors ${
-                tab === t.id ? 'text-green-700 border-green-600 border-b-2' : 'text-gray-500 border-transparent hover:text-green-600'
+              className={`px-2 py-1.5 text-xs sm:px-3 sm:py-2 sm:text-sm font-medium whitespace-nowrap rounded-lg transition-colors ${
+                tab === t.id ? 'bg-green-600 text-white' : 'text-gray-600 hover:bg-green-50 hover:text-green-700'
               }`}>
               <span className="mr-1">{t.icon}</span>{t.label}
             </button>
