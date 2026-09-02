@@ -2573,6 +2573,11 @@ export default function App() {
       {/* Footer */}
       <footer className="bg-gray-800 text-gray-400 text-center text-sm py-6 mt-12">
         <p>Grow-A-Row Impact Dashboard &middot; Fighting Food Insecurity One Tomato at a Time</p>
+        <p className="mt-1">
+          <a href="/reports/2026/" className="text-green-400 hover:text-green-300 font-semibold underline">
+            2026 Report to the Chelmsford Select Board
+          </a>
+        </p>
         {metrics?.date_range_start && <p className="mt-1 text-gray-500">Data: {new Date(metrics.date_range_start + 'T12:00:00').toLocaleDateString()} &ndash; {new Date(metrics.date_range_end + 'T12:00:00').toLocaleDateString()}</p>}
       </footer>
     </div>
