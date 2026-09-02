@@ -2493,19 +2493,32 @@ export default function App() {
     api('/stats/year-over-year').then(setYoyData).catch(() => {})
   }
 
-  const tabs = [
-    { id: 'overview', label: 'Overview', icon: '📊' },
-    { id: 'donors', label: 'Donors', icon: '👥' },
-    { id: 'products', label: 'Products', icon: '🥬' },
-    { id: 'trends', label: 'Trends', icon: '📈' },
-    { id: 'yoy', label: 'Year over Year', icon: '📅' },
-    { id: 'donations', label: 'All Donations', icon: '📋' },
-    { id: 'add', label: 'Add Donation', icon: '➕' },
-    { id: 'distributions', label: 'Distributions', icon: '🚚' },
-    { id: 'reports', label: 'Reports', icon: '📄' },
-    { id: 'manage', label: 'Manage Products', icon: '⚙️' },
-    { id: 'archive', label: 'Board Reports', icon: '📰' },
-    { id: 'about', label: 'About', icon: 'ℹ️' },
+  // Nav grouped into labeled category columns — every tab visible, organized by task
+  const navGroups = [
+    { label: 'Home', items: [
+      { id: 'overview', label: 'Overview', icon: '📊' },
+      { id: 'about', label: 'About', icon: 'ℹ️' },
+    ]},
+    { label: 'Donations', items: [
+      { id: 'add', label: 'Add Donation', icon: '➕' },
+      { id: 'donations', label: 'All Donations', icon: '📋' },
+      { id: 'donors', label: 'Donors', icon: '👥' },
+    ]},
+    { label: 'Produce', items: [
+      { id: 'products', label: 'Products', icon: '🥬' },
+      { id: 'manage', label: 'Manage Products', icon: '⚙️' },
+    ]},
+    { label: 'Deliveries', items: [
+      { id: 'distributions', label: 'Distributions', icon: '🚚' },
+    ]},
+    { label: 'Trends', items: [
+      { id: 'trends', label: 'Trends', icon: '📈' },
+      { id: 'yoy', label: 'Year over Year', icon: '📅' },
+    ]},
+    { label: 'Reports', items: [
+      { id: 'reports', label: 'Reports', icon: '📄' },
+      { id: 'archive', label: 'Board Reports', icon: '📰' },
+    ]},
   ]
 
   const hasFilters = filterDonor || filterProduct || filterFrom || filterTo
@@ -2530,15 +2543,20 @@ export default function App() {
 
       {/* Tabs */}
       <nav className="bg-white shadow border-b">
-        {/* Wrapping nav: every tab visible at every width — nothing hidden behind a scroll */}
-        <div className="max-w-7xl mx-auto px-4 py-1.5 flex flex-wrap gap-x-1 gap-y-1 justify-center sm:justify-start">
-          {tabs.map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              className={`px-2 py-1.5 text-xs sm:px-3 sm:py-2 sm:text-sm font-medium whitespace-nowrap rounded-lg transition-colors ${
-                tab === t.id ? 'bg-green-600 text-white' : 'text-gray-600 hover:bg-green-50 hover:text-green-700'
-              }`}>
-              <span className="mr-1">{t.icon}</span>{t.label}
-            </button>
+        {/* Category columns: items stacked under small labels — everything visible, organized by task */}
+        <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap gap-x-6 gap-y-3 justify-center sm:justify-start">
+          {navGroups.map(g => (
+            <div key={g.label} className="flex flex-col gap-0.5 min-w-[130px]">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-gray-400 px-2 mb-0.5">{g.label}</div>
+              {g.items.map(t => (
+                <button key={t.id} onClick={() => setTab(t.id)}
+                  className={`px-2 py-1 text-sm font-medium whitespace-nowrap rounded-lg text-left transition-colors ${
+                    tab === t.id ? 'bg-green-600 text-white' : 'text-gray-600 hover:bg-green-50 hover:text-green-700'
+                  }`}>
+                  <span className="mr-1.5">{t.icon}</span>{t.label}
+                </button>
+              ))}
+            </div>
           ))}
         </div>
       </nav>
