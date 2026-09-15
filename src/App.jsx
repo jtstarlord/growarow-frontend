@@ -1355,6 +1355,30 @@ function YearOverYearTab({ seasons, yoyData }) {
 
   const years = Object.keys(yoyData || {}).sort()
 
+  // Same-date season-to-date comparison: this year through today vs last year
+  // through the same calendar date — the honest "how are we doing?" numbers
+  const [trend, setTrend] = useState(null)
+  useEffect(() => {
+    const today = localToday()
+    const year = parseInt(today.slice(0, 4))
+    const priorDate = `${year - 1}${today.slice(4)}`
+    Promise.all([
+      api(`/metrics?start_date=${year}-01-01&end_date=${today}`),
+      api(`/metrics?start_date=${year - 1}-01-01&end_date=${priorDate}`),
+    ]).then(([cur, prior]) => {
+      if (!prior.total_donations) return  // no prior season to compare against
+      setTrend({ year, priorYear: year - 1, asOf: today, cur, prior })
+    }).catch(() => {})
+  }, [])
+
+  const trendRows = trend ? [
+    { label: 'Donations', cur: trend.cur.total_donations, prior: trend.prior.total_donations, fmt: v => v.toLocaleString() },
+    { label: 'Weight', cur: trend.cur.total_weight, prior: trend.prior.total_weight, fmt: v => formatNum(v) + ' lbs' },
+    { label: 'Value', cur: trend.cur.total_value, prior: trend.prior.total_value, fmt: v => formatMoney(v) },
+    { label: 'Donors', cur: trend.cur.unique_donors, prior: trend.prior.unique_donors, fmt: v => v.toLocaleString() },
+    { label: 'Servings', cur: trend.cur.servings_provided, prior: trend.prior.servings_provided, fmt: v => v.toLocaleString() },
+  ] : []
+
   if (!seasons || seasons.length === 0) return <p className="p-6 text-gray-500">No season data available yet.</p>
 
   return (
@@ -1373,6 +1397,32 @@ function YearOverYearTab({ seasons, yoyData }) {
             </div>
           </div>
         ))}
+        {trend && (
+          <div className="bg-white rounded-xl shadow p-5 border-l-4 border-blue-500">
+            <h3 className="text-2xl font-black text-blue-700">YoY Summary Trends</h3>
+            <p className="text-xs text-gray-400 mt-0.5">Season to date, through {new Date(trend.asOf + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} of each year</p>
+            <div className="mt-3 space-y-1 text-sm">
+              {trendRows.map(r => {
+                const delta = r.prior ? Math.round(((r.cur - r.prior) / r.prior) * 100) : null
+                const up = r.cur >= r.prior
+                return (
+                  <div key={r.label} className="flex justify-between items-baseline">
+                    <span className="text-gray-500">{r.label}</span>
+                    <span className="text-right">
+                      <span className="text-xs text-gray-400 mr-2">{r.fmt(r.prior)} → {r.fmt(r.cur)}</span>
+                      <span className={`font-bold ${up ? 'text-green-600' : 'text-red-600'}`}>
+                        {up ? '▲' : '▼'} {delta === null ? '—' : `${delta > 0 ? '+' : ''}${delta}%`}
+                      </span>
+                    </span>
+                  </div>
+                )
+              })}
+              <div className="flex justify-between pt-1 border-t mt-2">
+                <span className="text-gray-400 text-xs">{trend.priorYear} → {trend.year}</span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {years.length > 0 && chartData.length > 0 && (
