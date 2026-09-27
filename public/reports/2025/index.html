@@ -13,6 +13,8 @@
     @media print {
       body { background: white; }
       .sheet { margin: 0; box-shadow: none; }
+      /* Keep each section whole on one printed page */
+      .sheet > div > div { break-inside: avoid; page-break-inside: avoid; }
     }
   </style>
 </head>
